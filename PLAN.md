@@ -6,7 +6,7 @@
 
 **Architecture:** one Express 5 server with a `db.json` store, where `transition()` owns every milestone status. `paypal.js` makes our own REST calls (authorize, capture, void) plus `@paypal/agent-toolkit` for `get_order` and refunds. `ai.js` and `models.js` make the Vercel AI SDK calls. `agent.js` is an event-driven tool-calling agent whose money tools are gated in code. `public/` is vanilla JS grown from the wireframe.
 
-**Tech stack:** Node 22+ (local is v24.18), Express 5, multer, dotenv, zod, archiver (installed, unused in the MVP), ai@4, @ai-sdk/anthropic@1, @ai-sdk/google@1, @paypal/agent-toolkit. Tests use the built-in `node:test` (no new dependency).
+**Tech stack:** Node 22+ (local is v24.18), Express 5, multer, dotenv, zod, archiver (installed, unused in the MVP), ai@4, @ai-sdk/google@1, @paypal/agent-toolkit. Tests use the built-in `node:test` (no new dependency).
 
 **Spec:** `SPEC.md` (money, security, models), `milestone-pay-wireframe_final.html` (screens, flow), `docs/api.md` (the contract derived from both), `CLAUDE.md` (hard rules).
 
@@ -18,7 +18,7 @@
 - Every status change goes through `transition()`. Only the current milestone (lowest `seq` not `paid`) can be funded.
 - `capture_authorization` and `void_authorization` check for an approved proposal row in code, else they return `NO_APPROVAL`.
 - Chat, revision notes and change requests are untrusted. They are wrapped in `<untrusted_chat>` / `<untrusted_request>` and never reach the agent.
-- Models come from `models.js` only. `claude-haiku-5-5` handles extract, vision, agent and fallback. `gemini-3.1-flash-lite` handles scope (free tier, demo data only). Every call is logged to `ai_runs`, and calls stop at $1/day.
+- Models come from `models.js` only. Google Gemini only: `gemini-3.1-flash-lite` handles extract, vision, agent, scope, translate and fallback (fallback = one retry on the same model). Free tier is for demo data only. Cost is computed at Gemini paid rates ($0.25 / $1.50 per 1M) so the budget guard stays meaningful. Every call is logged to `ai_runs`, and calls stop at $1/day.
 - `MAX_OUT`: extract 3500, vision 600, scope 800, translate 1200, agentStep 400. Temperature 0. Agent `maxSteps: 4`, fallback after 8 s.
 - Escape all user text on render. Secrets only via `process.env`; never printed, logged or committed.
 - Uploads: chat import is `.txt .jpg .jpeg .png`, ≤10 files, ≤20 MB. Deliverables are `.pdf .png .jpg .jpeg .zip .mp4`, ≤20 MB. Extension **and** magic bytes are checked.
@@ -36,7 +36,7 @@
 
 | # | Conflict | Resolution | Rule applied |
 | --- | --- | --- | --- |
-| C1 | The wireframe's HOOD and code use Sonnet 5.5 and Sonnet cost numbers | Haiku 5.5 and Gemini Flash-Lite per SPEC, through `models.js` | SPEC wins on models |
+| C1 | The wireframe's HOOD and code use Sonnet 5.5 and Sonnet cost numbers | Gemini 3.1 Flash-Lite for every task, through `models.js` (owner decision 2026-11-06: no Anthropic API) | Owner decision overrides SPEC |
 | C2 | The wireframe accepts HEIC and PDF chat imports; SPEC adds `heic-convert` | MVP takes TXT, JPG and PNG only. No `heic-convert`, which isn't in CLAUDE.md's allowed deps anyway | Kickoff scope |
 | C3 | The wireframe and SPEC have a zip download and an "Under the hood" panel | Both cut from the MVP (kickoff). Single-file view and download stay | Kickoff scope |
 | C4 | The wireframe offers 55 translation languages | English only, returned by the extract call. The language picker shows English / Off | Kickoff scope |
@@ -123,7 +123,7 @@ All in THB, each printing real ids. If THB fails, rerun in USD, set `api_currenc
 - `withFallback` retries once on a 429, a timeout or a zod failure.
 - The budget guard throws `BUDGET_EXCEEDED` when stubbed at $1.
 
-**Eval (live, Haiku):**
+**Eval (live, Gemini 3.1 Flash-Lite):**
 - Baan Kafe: price 800000 cited to m5; deadline cited to m6; scope cited to m3; revisions null with gap g1; 3 milestones summing to 800000; m9 flagged; every Thai message has an English translation.
 - The other chats: price and deadline correct.
 
@@ -193,7 +193,7 @@ All in THB, each printing real ids. If THB fails, rerun in USD, set `api_currenc
 - Files: `classifyChange`, `prompts/scope.md`, `prompts/agent.md`, eval case.
 - The Thai ordering-page request returns `new_work`, `amount_minor 200000`, cites m3.
 - "Make the menu photos brighter" returns `revision`.
-- Gemini failing falls back to Haiku.
+- A Gemini failure (429, timeout, zod) retries once on `MODELS.fallback` (same model).
 
 **S7-api (backend):**
 - Endpoints: create, PATCH, send, close, decide.
@@ -215,7 +215,7 @@ All in THB, each printing real ids. If THB fails, rerun in USD, set `api_currenc
 
 ## Risks to watch
 
-- `gemini-3.1-flash-lite` and `claude-haiku-5-5` model ids, prices and free-tier limits are taken from SPEC; S2 confirms them live. `models.js` holds a `PRICES` table, so cost is computed from real usage.
+- `gemini-3.1-flash-lite` model id, prices and free-tier rate limits are taken from SPEC (a demo burst may hit free-tier 429s); S2 confirms them live. `models.js` holds a `PRICES` table, so cost is computed from real usage.
 - PayPal THB authorizations may be refused in the sandbox; S1 decides THB vs USD before any UI work.
 - `@paypal/agent-toolkit` 1.11's AI SDK adapter shape (`getTools()`, `client.getHeaders()`) is unverified; S1 confirms it and falls back to a direct OAuth fetch.
 - Sandbox buyer approval needs a human (you) in S1, S4, S6 and S8 unless Playwright and the buyer login are present.

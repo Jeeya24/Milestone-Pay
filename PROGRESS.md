@@ -2,14 +2,14 @@
 
 ## Phase 0: plan
 - [x] `docs/api.md`, `PLAN.md`, `PROGRESS.md` written
-- [ ] `.env` present with PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY
+- [ ] `.env` present with PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GOOGLE_GENERATIVE_AI_API_KEY (no Anthropic key: Gemini only, 2026-11-06)
 - [ ] Custom agents loaded (backend-builder, ai-builder, frontend-builder, qa-tester on Sonnet)
 - [x] PLAN.md approved (2026-11-06, incl. P1–P3)
 
 ## Slices
 - [ ] S0 Scaffold (backend)
 - [ ] S1 PayPal spike: smoke.js authorize→capture, authorize→void, capture→refund (THB / USD: _tbd_)
-- [ ] S2 Extractor + vision + 3-chat eval on Haiku 5.5
+- [ ] S2 Extractor + vision + 3-chat eval on Gemini 3.1 Flash-Lite
 - [ ] **Gate 1** reported
 - [ ] S3-api agreement endpoints · [ ] S3-ui dash/paste/review/client approve
 - [ ] S4 Fund (+ PayPal button UI)

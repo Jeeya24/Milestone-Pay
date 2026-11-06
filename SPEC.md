@@ -155,6 +155,8 @@ Most of the journey is plain code. Four steps call a model, and only step 7 runs
 
 ## Cheapest model plan
 
+> **Decision update 2026-11-06 (owner):** the app uses the Google Gemini API only, with no Anthropic API. Every task in the model plan below (extract, vision, agent, scope, translate, fallback) runs on `gemini-3.1-flash-lite`. The Haiku rows are superseded. The free tier stays demo-data only (see the training caveat below); real users need a paid Gemini key.
+
 Use **Claude Haiku 5.5** for the calls that need to be right, and **Gemini 3.1 Flash-Lite on Google's free tier** for the two simple ones. A full M1 demo loop then costs **under a cent**, against about $0.15 on Sonnet in the wireframe. Haiku 5.5 is $0.10 per million input and $0.50 per million output tokens for prompts up to 100k tokens ([Haiku 5.5 pricing](https://apidog.com/blog/claude-haiku-5-5-pricing/)). Gemini 3.1 Flash-Lite is free on the free tier and $0.25 / $1.50 on paid ([Gemini pricing, Oct 25](https://www.morphllm.com/gemini-api-pricing)).
 
 | Call | Model | Why this one | Tokens in / out | Cost per call | Fallback |

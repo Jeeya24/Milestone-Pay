@@ -77,7 +77,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 ### Step 2: Paste chat
 - `POST /api/projects` multipart: `chatText?` (string), `files[]?` (up to 10 files, 20 MB each, `.txt .jpg .jpeg .png`, checked by extension **and** magic bytes)
   → `201 { project:{ id, title:null, status:"draft" }, messages:[ { msg_id:"m1", seq, sender, me:boolean, time, text, source_file|null, page|null } ], import:{ deduped:<int>, files:[ { name, kind:"txt"|"image", messages:<int> } ] } }`
-  - Text and `.txt` go through the regex parser in `ai.js` with no model call. Images go through Haiku vision, at most 5 images per call. `me` = right-hand bubble, or a sender matching the freelancer's name "Ploy".
+  - Text and `.txt` go through the regex parser in `ai.js` with no model call. Images go through Gemini vision (`MODELS.vision`), at most 5 images per call. `me` = right-hand bubble, or a sender matching the freelancer's name "Ploy".
   - Errors: `400 EMPTY_CHAT`, `400 BAD_FILE`, `400 TOO_MANY_FILES`, `413 FILE_TOO_LARGE`, `429 BUDGET_EXCEEDED`, `502 AI_FAILED` (vision only; the message says "paste the text instead").
 
 ### Step 3: Agreement review
@@ -189,7 +189,7 @@ getOrder(orderId): Promise<object>
 
 // ai.js
 parseChatText(text, {freelancerName}): Message[]
-transcribeImages(files:[{path, name, mime}]): Promise<{messages, usage}> // Haiku vision, ≤5 per call; messages unnumbered, caller runs dedupeMessages then numbers m1..mN
+transcribeImages(files:[{path, name, mime}]): Promise<{messages, usage}> // Gemini vision, ≤5 per call; messages unnumbered, caller runs dedupeMessages then numbers m1..mN
 dedupeMessages(messages): {messages, removed}                   // key: sender + text + time
 extractAgreement(messages): Promise<{body, milestones, usage}>
 classifyChange(agreementSummary, request): Promise<{classification, reason, reason_source_ids, ai_draft}>
