@@ -189,7 +189,7 @@ getOrder(orderId): Promise<object>
 
 // ai.js
 parseChatText(text, {freelancerName}): Message[]
-transcribeImages(files:[{path, name, mime}]): Promise<Message[]> // Haiku vision, ≤5 per call
+transcribeImages(files:[{path, name, mime}]): Promise<{messages, usage}> // Haiku vision, ≤5 per call; messages unnumbered, caller runs dedupeMessages then numbers m1..mN
 dedupeMessages(messages): {messages, removed}                   // key: sender + text + time
 extractAgreement(messages): Promise<{body, milestones, usage}>
 classifyChange(agreementSummary, request): Promise<{classification, reason, reason_source_ids, ai_draft}>
