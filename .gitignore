@@ -6,3 +6,4 @@ db.json
 uploads/
 reports/*.log
 .DS_Store
+db.json.tmp
