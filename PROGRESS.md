@@ -7,9 +7,9 @@
 - [x] PLAN.md approved (2026-11-06, incl. P1–P3)
 
 ## Slices
-- [ ] S0 Scaffold (backend)
-- [ ] S1 PayPal spike: smoke.js authorize→capture, authorize→void, capture→refund (THB / USD: _tbd_)
-- [ ] S2 Extractor + vision + 3-chat eval on Gemini 3.1 Flash-Lite
+- [x] S0 Scaffold (backend): 2061cfb, review clean
+- [ ] S1 PayPal spike: code reviewed (4b1af86); live smoke.js waiting on sandbox buyer approval (THB accepted at order create)
+- [x] S2 Extractor + vision + 3-chat eval on Gemini 3.1 Flash-Lite: 25/25 PASS live, $0.0069 at paid rates (9dea971)
 - [ ] **Gate 1** reported
 - [ ] S3-api agreement endpoints · [ ] S3-ui dash/paste/review/client approve
 - [ ] S4 Fund (+ PayPal button UI)
