@@ -92,7 +92,7 @@ test('withFallback retries once on a 429, a timeout and a zod failure', async ()
       return model.modelId;
     });
     assert.deepEqual(seen, [false, true], err.name);
-    assert.equal(out, 'claude-haiku-5-5');
+    assert.equal(out, 'gemini-3.1-flash-lite');
   }
 });
 
@@ -118,15 +118,15 @@ test('withFallback uses MODELS[task] first and MODELS.fallback second', async ()
     if (!fallback) throw Object.assign(new Error('x'), { statusCode: 429 });
   });
   assert.deepEqual(used, [MODELS.scope.modelId, MODELS.fallback.modelId]);
-  assert.equal(MODELS.extract.modelId, 'claude-haiku-5-5');
+  assert.equal(MODELS.extract.modelId, 'gemini-3.1-flash-lite');
   assert.equal(MODELS.scope.modelId, 'gemini-3.1-flash-lite');
 });
 
 test('budget guard throws BUDGET_EXCEEDED (429) once $1 is logged, before any model call', async () => {
   assertAiBudget(); // empty db: fine
-  db.logAiRun({ task: 'extract', model: 'claude-haiku-5-5', cost_usd: 0.4 });
+  db.logAiRun({ task: 'extract', model: 'gemini-3.1-flash-lite', cost_usd: 0.4 });
   assertAiBudget(); // $0.40: fine
-  db.logAiRun({ task: 'extract', model: 'claude-haiku-5-5', cost_usd: 0.6 });
+  db.logAiRun({ task: 'extract', model: 'gemini-3.1-flash-lite', cost_usd: 0.6 });
   assert.throws(() => assertAiBudget(), (e) => e.code === 'BUDGET_EXCEEDED' && e.status === 429);
 
   const msgs = parseChatText('Nok: hi\nPloy: hello');
@@ -135,10 +135,9 @@ test('budget guard throws BUDGET_EXCEEDED (429) once $1 is logged, before any mo
   assert.equal(db.load().ai_runs.length, 2, 'no run is logged for a blocked call');
 });
 
-test('costUsd computes from real usage with the Haiku 5.5 and Gemini prices', () => {
-  assert.equal(costUsd('claude-haiku-5-5', { promptTokens: 1_000_000, completionTokens: 1_000_000 }), 0.6);
-  assert.equal(costUsd('claude-haiku-5-5', { promptTokens: 4000, completionTokens: 2900 }), (4000 * 0.1 + 2900 * 0.5) / 1e6);
-  assert.equal(costUsd('gemini-3.1-flash-lite', { promptTokens: 5000, completionTokens: 5000 }), 0);
+test('costUsd computes from real usage with the Gemini paid prices', () => {
+  assert.equal(costUsd('gemini-3.1-flash-lite', { promptTokens: 1_000_000, completionTokens: 1_000_000 }), 1.75);
+  assert.equal(costUsd('gemini-3.1-flash-lite', { promptTokens: 4000, completionTokens: 2900 }), (4000 * 0.25 + 2900 * 1.5) / 1e6);
   assert.equal(costUsd('unknown-model', { promptTokens: 5 }), 0);
 });
 

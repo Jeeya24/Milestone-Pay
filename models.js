@@ -1,37 +1,32 @@
 // Task -> model map, output caps, prices and the one-retry fallback wrapper.
-// Models come from here only. Keys are read by the providers from process.env
-// (ANTHROPIC_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY) and are never printed.
-import { anthropic } from '@ai-sdk/anthropic';
+// Gemini only. Models come from here only. The provider reads GOOGLE_GENERATIVE_AI_API_KEY from
+// process.env; it is never printed.
 import { google } from '@ai-sdk/google';
 import { NoObjectGeneratedError, TypeValidationError, JSONParseError, RetryError } from 'ai';
 import { ZodError } from 'zod';
 
+const gemini = () => google('gemini-3.1-flash-lite');
+
 export const MODELS = {
-  extract: anthropic('claude-haiku-5-5'),
-  vision: anthropic('claude-haiku-5-5'),
-  agent: anthropic('claude-haiku-5-5'),
-  scope: google('gemini-3.1-flash-lite'), // free tier, demo data only
-  translate: google('gemini-3.1-flash-lite'), // free tier, demo data only
-  fallback: anthropic('claude-haiku-5-5'),
+  extract: gemini(),
+  vision: gemini(),
+  agent: gemini(),
+  scope: gemini(),
+  translate: gemini(),
+  fallback: gemini(), // one retry on the same model
 };
 
 export const MAX_OUT = { extract: 3500, vision: 600, scope: 800, translate: 1200, agentStep: 400 };
 
-/** Temperature for every call (SPEC). See TEMPERATURE_MODELS for models that reject it. */
+/** Temperature for every call. */
 export const TEMPERATURE = 0;
 
-/** Models that accept a non-default temperature. Others get no temperature param. */
-export const TEMPERATURE_MODELS = new Set(['gemini-3.1-flash-lite']);
-
 /**
- * USD per 1M tokens, [input, output].
- * Haiku 5.5: $0.10 / $0.50 for prompts up to 100k tokens (SPEC.md "Cheapest model plan",
- * and the claude-api skill model table). Prompts here stay far below the 100k step.
- * Gemini 3.1 Flash-Lite: $0 on Google's free tier (SPEC.md); paid would be $0.25 / $1.50.
+ * USD per 1M tokens. Gemini 3.1 Flash-Lite paid rates ($0.25 in / $1.50 out, SPEC.md), applied even on the
+ * free tier (which actually bills $0) so ai_runs cost and the $1/day budget guard stay meaningful.
  */
 export const PRICES = {
-  'claude-haiku-5-5': { input: 0.1, output: 0.5 },
-  'gemini-3.1-flash-lite': { input: 0, output: 0 },
+  'gemini-3.1-flash-lite': { input: 0.25, output: 1.5 },
 };
 
 export function costUsd(modelId, usage = {}) {

@@ -1,24 +1,18 @@
-// Live eval of the AI layer. Usage: node evals/run.js
-// Needs ANTHROPIC_API_KEY (Haiku 5.5, via models.js). Spends a few cents at most.
-// Set EVAL_PROVIDER=google to run every task on Gemini 3.1 Flash-Lite instead (free tier). That is only a
-// prompt/schema check for when no Anthropic key is available; it is NOT the production model plan.
+// Live eval of the AI layer on Gemini 3.1 Flash-Lite (models.js). Usage: node evals/run.js
+// Needs GOOGLE_GENERATIVE_AI_API_KEY. Costs are shown at paid rates even on the free tier (which bills $0).
 import 'dotenv/config';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from '../db.js';
-import { MODELS } from '../models.js';
 import { parseChatText, transcribeImages, dedupeMessages, numberMessages, extractAgreement } from '../ai.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const read = (p) => fs.readFileSync(path.join(HERE, '..', p), 'utf8');
 
-if (process.env.EVAL_PROVIDER === 'google') {
-  MODELS.extract = MODELS.vision = MODELS.fallback = MODELS.scope;
-  console.log('NOTE: EVAL_PROVIDER=google, running on Gemini instead of Haiku 5.5\n');
-} else if (!process.env.ANTHROPIC_API_KEY) {
-  console.log('ANTHROPIC_API_KEY is not set: cannot run the Haiku eval. (EVAL_PROVIDER=google runs a prompt/schema check on Gemini.)');
+if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  console.log('GOOGLE_GENERATIVE_AI_API_KEY is not set: cannot run the eval. Add it to .env.');
   process.exit(2);
 }
 

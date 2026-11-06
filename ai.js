@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import * as db from './db.js';
-import { MODELS, MAX_OUT, TEMPERATURE, TEMPERATURE_MODELS, costUsd, withFallback } from './models.js';
+import { MODELS, MAX_OUT, TEMPERATURE, costUsd, withFallback } from './models.js';
 
 export { withFallback };
 
@@ -56,10 +56,10 @@ async function runObject({ task, schema, schemaName, system, messages, timeoutMs
     const args = {
       model, schema, schemaName, system, messages,
       maxTokens: maxOut,
+      temperature: TEMPERATURE,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(timeoutMs),
     };
-    if (TEMPERATURE_MODELS.has(model.modelId)) args.temperature = TEMPERATURE;
     try {
       const res = await generateObject(args);
       log(model.modelId, res.usage, Date.now() - started, fallback);
@@ -181,7 +181,7 @@ const VisionSchema = z.object({
 const imageMime = (f) => f.mime || (/\.png$/i.test(f.name || f.path) ? 'image/png' : 'image/jpeg');
 
 /**
- * Transcribe chat screenshots with Haiku vision, at most 5 images per call.
+ * Transcribe chat screenshots with Gemini vision, at most 5 images per call.
  * Returns ordered lines { sender, me, time, text, source_file } (not numbered, not deduped:
  * run dedupeMessages next). Right-hand bubbles are the freelancer. Returns { messages, usage }.
  */
