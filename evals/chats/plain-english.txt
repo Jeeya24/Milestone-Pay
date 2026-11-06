@@ -1,0 +1,9 @@
+Priya: Hi Dana, I need a one-page landing page for my yoga studio, Lotus Flow.
+Dana: Happy to help! What sections do you want?
+Priya: Hero, class schedule, pricing, and a contact form. I'll send the copy.
+Dana: Great. The price is 15,000 THB, half upfront and half at launch.
+Priya: Works for me. I need it live by 15 December.
+Dana: Done. Two milestones then: design first, then the live build.
+Priya: Perfect. Can I have unlimited tweaks until I like it?
+Dana: Up to 3 rounds of revisions per milestone, please.
+Priya: Fine, 3 rounds is OK.
