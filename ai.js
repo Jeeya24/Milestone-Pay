@@ -263,13 +263,44 @@ const ExtractSchema = z.object({
 });
 
 // Backstop for the demo line m9: instructions aimed at an AI or about moving money.
+const AI_CUE = /\b(AI|A\.I\.|assistant|chatbot|agent|claude|chatgpt|bot|LLM)\b/i;
+const MONEY_MOVE = /\b(release|send|transfer|pay out|payout|approve|capture)\b[^.\n]{0,30}\b(funds?|money|payment|payments)\b/i;
 const INJECTION_PATTERNS = [
   /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(contract|instructions?|rules?|previous|above|agreement|terms)\b/i,
-  /\b(release|send|transfer|pay out|payout)\b[^.\n]{0,20}\b(all|the|every)\b[^.\n]{0,15}\b(funds?|money|payment)\b/i,
   /\b(AI|assistant|chatbot|agent|claude|chatgpt|bot|LLM)\b[^.\n]{0,60}\b(ignore|release|approve|capture|transfer)\b/i,
   /\b(system prompt|developer message)\b/i,
 ];
-export const looksLikeInjection = (text) => INJECTION_PATTERNS.some((re) => re.test(text));
+/** An instruction cue is required: a money verb alone ("I will send the money after design") is normal chat. */
+export const looksLikeInjection = (text) =>
+  INJECTION_PATTERNS.some((re) => re.test(text)) || (AI_CUE.test(text) && MONEY_MOVE.test(text));
+
+/**
+ * Make milestone amounts add up to total_minor. Pure.
+ * - no milestones, or total 0 with milestones: nothing to reconcile (total 0 + milestones sets totalMismatch).
+ * - small gap (<= 1% of total) that keeps the last amount >= 0: put it on the last milestone.
+ * - otherwise: deterministic even split in whole units (multiples of 100 satang), remainder on the last.
+ * Returns { milestones, adjusted, rebalanced, totalMismatch }; every amount stays a non-negative integer.
+ */
+export function reconcileMilestones(rows, total) {
+  const out = rows.map((r) => ({ ...r }));
+  const res = { milestones: out, adjusted: 0, rebalanced: false, totalMismatch: false };
+  if (!out.length) return res;
+  if (!(total > 0)) { res.totalMismatch = true; return res; }
+  const sum = out.reduce((s, m) => s + m.amount_minor, 0);
+  const diff = total - sum;
+  if (!diff) return res;
+  const last = out[out.length - 1].amount_minor + diff;
+  if (last >= 0 && Math.abs(diff) <= total * 0.01) {
+    out[out.length - 1].amount_minor = last;
+    res.adjusted = diff;
+    return res;
+  }
+  const n = out.length;
+  const each = Math.floor(total / n / 100) * 100;
+  out.forEach((m, i) => { m.amount_minor = i === n - 1 ? total - each * (n - 1) : each; });
+  res.rebalanced = true;
+  return res;
+}
 
 const hasNonLatin = (s) => /[^\u0000-\u024f\s\p{P}\p{S}\p{N}]/u.test(s);
 
@@ -311,7 +342,8 @@ export async function extractAgreement(messages, { today = new Date().toISOStrin
       flags.push({ msg_id: m.msg_id, reason: 'Instruction aimed at the AI or at moving money (caught by pattern check)' });
     }
   }
-  const flagged = new Set(flags.map((f) => f.msg_id));
+  // Only the model's own flags strip citations; backstop-only flags raise the alert but keep citations.
+  const flagged = new Set(modelFlagIds);
 
   const terms = TERM_KEYS.map((key) => {
     const t = raw.terms.find((x) => x.key === key);
@@ -343,7 +375,7 @@ export async function extractAgreement(messages, { today = new Date().toISOStrin
   }
   gaps = gaps.slice(0, 4).map((g, i) => ({ id: `g${i + 1}`, ...g, fixed: false }));
 
-  // Milestones add up to the total: put any rounding difference on the last one.
+  // Milestones add up to the total (see reconcileMilestones).
   const msRows = raw.milestones.map((m, i) => ({
     label: `M${i + 1}`,
     seq: i + 1,
@@ -354,12 +386,7 @@ export async function extractAgreement(messages, { today = new Date().toISOStrin
     start_day: m.start_day,
     end_day: Math.max(m.end_day, m.start_day),
   }));
-  let adjusted = 0;
-  if (msRows.length && raw.total_minor > 0) {
-    const sum = msRows.reduce((s, m) => s + m.amount_minor, 0);
-    adjusted = raw.total_minor - sum;
-    if (adjusted) msRows[msRows.length - 1].amount_minor += adjusted;
-  }
+  const rec = reconcileMilestones(msRows, raw.total_minor);
 
   const en = {};
   for (const t of raw.translations) {
@@ -381,8 +408,11 @@ export async function extractAgreement(messages, { today = new Date().toISOStrin
   };
   return {
     body,
-    milestones: msRows,
+    milestones: rec.milestones,
     usage,
-    meta: { model_flag_ids: modelFlagIds, sum_adjusted_minor: adjusted, missing_translations: missingTranslations },
+    meta: {
+      model_flag_ids: modelFlagIds, sum_adjusted_minor: rec.adjusted, amounts_rebalanced: rec.rebalanced,
+      total_mismatch: rec.totalMismatch, missing_translations: missingTranslations,
+    },
   };
 }
