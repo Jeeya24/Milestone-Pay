@@ -1,0 +1,201 @@
+# Milestone Pay API contract (MVP)
+
+Source: the wireframe's `HOOD{}` plus its action functions, with SPEC.md taking priority on money handling, security and models. Builders follow this exactly. A change goes through the orchestrator, who edits this file first.
+
+## Conventions
+
+- JSON in and out. Errors always use the shape `{ "error": "CODE", "message": "human text" }` with the HTTP status listed.
+- Money is an **integer number of satang** in every field ending `_minor`, so 2,400 THB is `240000`. Never use floats. The conversion to a PayPal string (`"2400.00"`) happens only inside `paypal.js`.
+- **Ids are globally unique random strings** (`prj_…`, `ms_…`, `agr_…`, `pay_…`, `dlv_…`, `prop_…`, `cr_…`). The display labels `M1`, `M2`… live in `label`. A label is never used as an id, a PayPal `custom_id` or part of a `PayPal-Request-Id`, because labels repeat across projects and seed runs.
+- Chat message ids inside a project are `m1`, `m2`… (`msg_id`). They are what citation chips point to.
+- Day 1 has no auth. The browser sends `party: "freelancer" | "client"` where an action depends on the role. The client view is `?as=client&p=<project_id>`.
+- `transition()` failures return **409** `ILLEGAL_TRANSITION`.
+- Times are ISO 8601 strings.
+- Every user-supplied string (chat, notes, change requests, edited titles) is returned raw and **escaped by the frontend on render**.
+
+## Milestone state machine (owned by `db.js` `transition()`)
+
+| From | To | Triggered by |
+| --- | --- | --- |
+| `draft` | `agreed` | both parties approve the same agreement hash |
+| `agreed` | `authorized` | `POST /milestones/:id/authorize` succeeds (current milestone only) |
+| `authorized` | `submitted` | `POST /milestones/:id/submit` |
+| `revision_requested` | `submitted` | `POST /milestones/:id/submit` after a re-upload |
+| `submitted` | `revision_requested` | `POST /milestones/:id/revision` |
+| `submitted` | `paid` | `capture_authorization` with an approved `release` proposal |
+| `authorized`, `submitted`, `revision_requested` | `voided` | `void_authorization` with an approved `void` proposal |
+| `paid` | `refunded` | `create_refund` (gated; not in the UI for the MVP) |
+
+Every other move throws. An accepted change order inserts a new milestone directly in `agreed`; that is a creation, not a transition.
+
+**Current milestone** = the lowest-`seq` milestone whose status is not `paid`. Only the current milestone can be funded, submitted or reviewed. If the current milestone is `voided`, the project is stopped and nothing later can be funded.
+
+## Objects
+
+```jsonc
+// Milestone (API shape)
+{ "id":"ms_x", "project_id":"prj_x", "label":"M1", "seq":1, "title":"Design mockups",
+  "amount_minor":240000, "currency":"THB", "status":"agreed",
+  "criteria":["Mockup for each of the 4 pages"], "rev_count":0, "rev_limit":2 /* null until gap g1 is fixed */,
+  "rev_note":null, "is_current":true, "fundable":true,
+  "start_day":0, "end_day":3,                      // timeline bars, days from project start
+  "payment": { "order_id":"5O…", "authorization_id":"0VF…", "expires_at":"…", "capture_id":null,
+               "status":"AUTHORIZED" /* CREATED|AUTHORIZED|CAPTURED|VOIDED|REFUNDED */ } | null,
+  "deliverables":[ /* current version only */
+    { "id":"dlv_x", "version":1, "filename":"mockup-home.png", "size":123, "mime":"image/png",
+      "sha256":"…", "download_url":"/api/deliverables/dlv_x/download" } ],
+  "versions":1 }
+
+// Activity row
+{ "id":"act_x", "at":"…", "project_id":"prj_x", "who":"ai|pp|agent|client|free|sys", "text":"…" }
+// Ledger row (totals are computed from these, never stored)
+{ "id":"led_x", "at":"…", "project_id":"prj_x", "milestone_id":"ms_x", "label":"M1",
+  "event":"AUTHORIZED|CAPTURED|VOIDED|REFUNDED", "paypal_id":"…", "amount_minor":240000 }
+// Notification (fixed templates, no model)
+{ "id":"ntf_x", "at":"…", "project_id":"prj_x", "to":"client|freelancer", "text":"M1 is paid. Fund M2 Build website (3,200 THB) so Ploy can start." }
+// Agent run
+{ "id":"run_x", "event":"milestone.submitted|proposal.approved|proposal.voided", "milestone_id":"ms_x",
+  "mode":"model|fallback", "steps":[ { "tool":"get_order", "args":{…}, "result":{…}, "ok":true } ], "at":"…" }
+// Proposal
+{ "id":"prop_x", "milestone_id":"ms_x", "action":"release|void", "status":"pending|approved|executed|withdrawn",
+  "reason":"…", "approved_by":"client"|null, "created_at":"…" }
+```
+
+## Endpoints
+
+### Config and demo
+- `GET /api/config` → `200 { paypal_client_id, currency:"THB", api_currency:"THB"|"USD", env:"sandbox", budget:{ today_cost_usd, limit_usd:1, blocked:boolean } }`. The client id is public by design; no secret is ever returned.
+- `POST /api/demo` → `201 { project_id }`. Creates the Baan Kafe project from `fixtures/baan-kafe.txt` and runs extract. It uses a cached extraction from `fixtures/baan-kafe.extract.json` if that file exists, otherwise a live call.
+
+### Step 1: Dashboard
+- `GET /api/projects` → `200 { projects:[ { id, title, freelancer, client, total_minor, status, milestones:[{id,label,status}], open_change_request:{ id, from, status }|null } ], totals:{ held_minor, paid_minor, not_funded_minor } }`
+  - `held_minor` = the amount of every milestone whose latest ledger event is `AUTHORIZED`.
+  - `paid_minor` = `CAPTURED` minus `REFUNDED`.
+  - `not_funded_minor` = the amount of milestones in `draft` or `agreed`.
+  - The badge shows when `open_change_request.from === "client"` and `status === "open"`.
+
+### Step 2: Paste chat
+- `POST /api/projects` multipart: `chatText?` (string), `files[]?` (up to 10 files, 20 MB each, `.txt .jpg .jpeg .png`, checked by extension **and** magic bytes)
+  → `201 { project:{ id, title:null, status:"draft" }, messages:[ { msg_id:"m1", seq, sender, me:boolean, time, text, source_file|null, page|null } ], import:{ deduped:<int>, files:[ { name, kind:"txt"|"image", messages:<int> } ] } }`
+  - Text and `.txt` go through the regex parser in `ai.js` with no model call. Images go through Haiku vision, at most 5 images per call. `me` = right-hand bubble, or a sender matching the freelancer's name "Ploy".
+  - Errors: `400 EMPTY_CHAT`, `400 BAD_FILE`, `400 TOO_MANY_FILES`, `413 FILE_TOO_LARGE`, `429 BUDGET_EXCEEDED`, `502 AI_FAILED` (vision only; the message says "paste the text instead").
+
+### Step 3: Agreement review
+- `POST /api/projects/:id/extract` → `200 { agreement, milestones:[Milestone], ai_run:{ model, input_tokens, output_tokens, cost_usd, fallback:boolean } }`
+
+```jsonc
+// agreement
+{ "id":"agr_x", "project_id":"prj_x", "version":1, "status":"draft|sent|approved", "content_hash":null,
+  "body": {
+    "title":"Baan Kafe website", "client_name":"Nok", "freelancer_name":"Ploy",
+    "total_minor":800000, "currency":"THB",
+    "terms":[ { "key":"scope|deliverables|price|deadline|payment|revisions|assets", "label":"Scope",
+                "value":"4-page café website…"|null, "source_message_ids":["m3"] } ],
+    "gaps":[ { "id":"g1", "text":"No revision limit agreed.", "fix_label":"Set: 2 revision rounds per milestone",
+               "term_key":"revisions"|null, "term_value":"2 rounds per milestone"|null, "fixed":false } ],
+    "injection_flags":[ { "msg_id":"m9", "reason":"Instruction aimed at the AI: release all funds" } ],
+    "translations":{ "en":{ "m1":"Hi Ploy! …" } }   // only for messages not already fully English
+  } }
+```
+  - Re-running extract replaces the draft. `409 AGREEMENT_FROZEN` once the freelancer has approved.
+  - Gap `g1` (revision limit) is the one whose fix sets `rev_limit = 2` on every milestone.
+- `POST /api/agreements/:id/gaps/:gapId/fix` → `200 { agreement, milestones }`. Sets `fixed:true` and, when `term_key` is set, writes `term_value` into that term. `409 AGREEMENT_FROZEN`.
+- `PATCH /api/milestones/:id` `{ amount_minor }` → `200 { milestone, sum_minor, agreed_total_minor, mismatch:boolean }`. `400 BAD_AMOUNT` (not a non-negative integer). `409 AGREEMENT_FROZEN` once the freelancer has approved. Only `amount_minor` is accepted.
+
+### Step 4: Approve agreement
+- `POST /api/agreements/:id/approve` `{ party, content_hash? }`
+  - `party:"freelancer"` freezes the body (milestone amounts included). It computes `content_hash = "sha256:" + hex(sha256(canonicalJSON({ body without translations, milestones:[{label,title,amount_minor,criteria,rev_limit}] })))` and sets `status:"sent"`. It returns `200 { agreement, client_url:"/?as=client&p=<project_id>" }`.
+  - `party:"client"` must send a `content_hash` equal to the stored one, else `409 HASH_MISMATCH`. Before the freelancer approves it returns `409 NOT_SENT`. On success: `status:"approved"`, every milestone goes `draft → agreed`, and the response is `200 { agreement, milestones }`. No charge.
+  - Both approvals are stored in `agreement_approvals { agreement_id, party, content_hash, at }`.
+
+### Step 5: Fund milestone
+- `POST /api/milestones/:id/order` (any request body is ignored) → `200 { order_id, status:"CREATED" }`.
+  - Creates a PayPal order with `intent: "AUTHORIZE"`, `custom_id = milestone id`, the amount from the db, and `PayPal-Request-Id: order-<milestone id>-<attempt>`.
+  - Idempotent: if a CREATED order already exists for this milestone, it returns that order.
+  - Errors: `409 NOT_CURRENT` (not the current milestone, or status ≠ `agreed`), `409 AGREEMENT_NOT_APPROVED`, `502 PAYPAL_ERROR { paypal_debug_id }`.
+- `POST /api/milestones/:id/authorize` `{ order_id }` → `200 { milestone, payment:{ order_id, authorization_id, status:"AUTHORIZED", expires_at } }`.
+  - Sends `PayPal-Request-Id: auth-<order_id>`. Stores the payment, runs `transition(→authorized)`, and writes ledger row `AUTHORIZED` and an activity row.
+  - Errors: `409 ORDER_MISMATCH`, `409 NOT_CURRENT`, `502 PAYPAL_ERROR`. A repeat call after success returns the same payment (no second authorization).
+
+### Step 6: Submit work
+- `POST /api/milestones/:id/deliverables` multipart `files[]` (`.pdf .png .jpg .jpeg .zip .mp4`, 20 MB each, extension + magic bytes) → `201 { deliverables:[…], version }`.
+  - `version = rev_count + 1`. Older versions are kept.
+  - Allowed only in `authorized` or `revision_requested`, else `409 NOT_SUBMITTABLE`. File errors: `400 BAD_FILE`, `413 FILE_TOO_LARGE`.
+- `POST /api/milestones/:id/submit` → `200 { milestone, proposal, agent_run }`.
+  - Runs `transition(→submitted)` and emits `milestone.submitted`. The agent runs synchronously: `get_order`, then `propose_release`, with the 8-second fallback.
+  - Errors: `409 NO_FILES` (no deliverable at the current version), `409 ILLEGAL_TRANSITION`.
+
+### Step 7: Client reviews and pays
+- `GET /api/deliverables/:id/download` (`?inline=1` to view in the browser) streams the file from `./uploads`. It sets `Content-Disposition` and the stored mime type, and refuses path traversal. Never a static folder.
+- `POST /api/agent/run` `{ event, milestone_id }` → `200 { agent_run }`. Manual re-run and debugging. The event is one of the three names above.
+- `POST /api/proposals/:id/approve` `{ party:"client" }` → `200 { proposal, milestone, payment:{ capture_id, status:"CAPTURED" }, agent_run, next:{ milestone_id, label, title, amount_minor }|null }`.
+  - Sets proposal `approved`, then fires `proposal.approved`. The agent runs `capture_authorization` (gated) and `notify` (freelancer: paid; client: fund the next milestone).
+  - Sends `PayPal-Request-Id: cap-<authorization_id>`. Adds ledger row `CAPTURED` with the capture id.
+  - Errors: `409 PROPOSAL_NOT_PENDING`; repeat approvals never capture twice.
+- `POST /api/milestones/:id/revision` `{ note, items?:string[] }` → `200 { milestone }`.
+  - Status becomes `revision_requested`, `rev_count+1`, `rev_note` stored (≤1000 chars). The pending proposal becomes `withdrawn`; the hold stays.
+  - Errors: `400 NOTE_TOO_SHORT` (<5 chars after trim), `409 REVISION_LIMIT` (`rev_limit` set and `rev_count >= rev_limit`).
+  - **The note is never passed to the agent.**
+- `POST /api/proposals/:id/cancel` `{ party:"client" }` → `200 { milestone, payment:{ status:"VOIDED" }, agent_run }`.
+  - Withdraws the release proposal and inserts a `void` proposal already `approved` by the client. Fires `proposal.voided`; the agent runs `void_authorization` (gated) with `PayPal-Request-Id: void-<authorization_id>`. Adds ledger row `VOIDED`.
+- `POST /api/agent/guardrail-test` `{ milestone_id }` → `200 { result:{ error:"NO_APPROVAL" }, proposal_id:"prop_forged_…", trace:"…" }`. Calls the real `capture_authorization` executor with a forged proposal id. It never calls PayPal.
+
+### Step 8: Scope creep (one open request per project)
+- `POST /api/projects/:id/change-requests` `{ message, from:"client"|"freelancer" }` → `201 { change_request }`.
+  - Runs the classifier on the frozen agreement summary plus the request (in `<untrusted_request>`), never the chat.
+  - Errors: `400 MESSAGE_TOO_SHORT` (<5), message capped at 1000 chars, `409 OPEN_REQUEST_EXISTS`, `409 AGREEMENT_NOT_APPROVED`.
+
+```jsonc
+{ "id":"cr_x", "project_id":"prj_x", "from":"client", "text":"…", "status":"open|sent|accepted|declined|closed",
+  "classification":"in_scope|revision|new_work", "reason":"…", "reason_source_ids":["m3"],
+  "ai_draft":{ "label":"M4", "title":"Online ordering page", "deliverables":["…"], "amount_minor":200000, "price_basis":"8,000 THB ÷ 4 pages" } | null,
+  "draft": { /* same shape, freelancer-editable */ } | null,
+  "sent_version": { /* frozen copy */ } | null, "milestone_id":null, "created_at":"…" }
+```
+- `PATCH /api/change-requests/:id` `{ title?, deliverables?, amount_minor? }` → `200 { change_request }`. Only when `status:"open"`, else `409 FROZEN`. Title and each deliverable are trimmed to ≤120 chars.
+- `POST /api/change-requests/:id/send` → `200 { change_request }`. Freezes `sent_version`. Errors: `400 TITLE_REQUIRED`, `400 DELIVERABLE_REQUIRED`, `409 NOT_NEW_WORK`.
+- `POST /api/change-requests/:id/close` → `200 { change_request }`. For `in_scope` or `revision` verdicts, where there is nothing to price.
+- `POST /api/change-requests/:id/decide` `{ accept:boolean }` → `200 { change_request, milestone|null }`. Accept creates milestone `M<n+1>` in `agreed`, with the amount, title and criteria from `sent_version`. `409 NOT_SENT`.
+
+### Step 9: Project page
+- `GET /api/projects/:id` → `200 { project, agreement, approvals, messages, milestones, ledger, activity, notifications, agent_runs, change_requests, ai_cost:{ calls, cost_usd } }`
+- `POST /api/projects/:id/refresh` → `200 { payments:[ { milestone_id, order_status, authorization_status, capture_status } ] }`. Uses toolkit `get_order` per payment; the db is updated only to match PayPal and goes through `transition()`.
+
+### AI accounting
+- `GET /api/ai-runs?date=YYYY-MM-DD` → `200 { runs:[ { at, task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback } ], total_cost_usd }`
+- `db.js` exports `logAiRun(row)` and `todayCostUsd()`. The budget guard throws `BUDGET_EXCEEDED` (HTTP 429) when `todayCostUsd() >= 1`.
+
+## Internal module interfaces
+
+```js
+// db.js
+load(): DB; save(): void                                        // atomic: write db.json.tmp then rename
+id(prefix): string
+transition(milestone, to, patch?): Milestone                     // throws {code:'ILLEGAL_TRANSITION'}
+currentMilestone(projectId): Milestone|null
+logAiRun({task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback}): void
+todayCostUsd(): number
+activity(projectId, who, text): void; ledgerAdd(row): void; notify(projectId, to, text): void
+
+// paypal.js
+toolkit                                                          // PayPalAgentToolkit, whitelist orders.get + payments.createRefund/getRefunds
+toMoney(amount_minor, currency): {currency_code, value}          // the only satang → string conversion
+createAuthOrder(milestone, attempt): Promise<{id,status,links}>
+authorizeOrder(orderId): Promise<{authorization_id, status, expires_at}>
+captureAuth(authId): Promise<{id, status}>
+voidAuth(authId): Promise<{status}>
+refundCapture(captureId, amount_minor?): Promise<{id, status}>
+getOrder(orderId): Promise<object>
+
+// ai.js
+parseChatText(text, {freelancerName}): Message[]
+transcribeImages(files:[{path, name, mime}]): Promise<Message[]> // Haiku vision, ≤5 per call
+dedupeMessages(messages): {messages, removed}                   // key: sender + text + time
+extractAgreement(messages): Promise<{body, milestones, usage}>
+classifyChange(agreementSummary, request): Promise<{classification, reason, reason_source_ids, ai_draft}>
+withFallback(task, fn): Promise<any>                            // in models.js or ai.js
+
+// agent.js
+runAgent(event, milestoneId, {forceFallback?}): Promise<AgentRun>
+tools: { get_order, propose_release, capture_authorization, void_authorization, notify }
+```
