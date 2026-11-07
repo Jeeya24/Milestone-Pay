@@ -78,9 +78,9 @@ const uploader = multer({
   },
 }).any();
 
-function parseUpload(req, res) {
+function parseUpload(req, res, up = uploader) {
   return new Promise((resolve, reject) => {
-    uploader(req, res, (err) => {
+    up(req, res, (err) => {
       if (!err) return resolve();
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') return reject(E('FILE_TOO_LARGE', 'A file is larger than 20 MB.', 413));
@@ -93,6 +93,45 @@ function parseUpload(req, res) {
     });
   });
 }
+
+
+// ---- Deliverables (extension AND magic bytes) ------------------------------
+const DLV_EXT = {
+  '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.zip': 'application/zip', '.mp4': 'video/mp4',
+};
+const DLV_ALLOWED_MSG = 'Use .pdf, .png, .jpg, .jpeg, .zip or .mp4.';
+const startsWith = (b, bytes, at = 0) => b.length >= at + bytes.length && bytes.every((x, i) => b[at + i] === x);
+
+function checkDeliverable(f) {
+  const ext = path.extname(f.originalname).toLowerCase();
+  const mime = DLV_EXT[ext];
+  const b = f.buffer;
+  const ok = {
+    '.pdf': () => startsWith(b, [0x25, 0x50, 0x44, 0x46]),
+    '.png': () => startsWith(b, [0x89, 0x50, 0x4e, 0x47]),
+    '.jpg': () => startsWith(b, [0xff, 0xd8, 0xff]),
+    '.jpeg': () => startsWith(b, [0xff, 0xd8, 0xff]),
+    '.zip': () => startsWith(b, [0x50, 0x4b, 0x03, 0x04]),
+    '.mp4': () => startsWith(b, [0x66, 0x74, 0x79, 0x70], 4),
+  }[ext];
+  if (!mime || !ok() || b.length === 0) {
+    throw E('BAD_FILE', `"${f.originalname}" is not a valid ${ext || 'deliverable'} file. ${DLV_ALLOWED_MSG}`);
+  }
+  return mime;
+}
+
+const deliverableUploader = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: MAX_FILES, fileSize: MAX_BYTES, fields: 10 },
+  fileFilter: (_req, file, cb) => {
+    file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    if (!DLV_EXT[path.extname(file.originalname).toLowerCase()]) {
+      return cb(E('BAD_FILE', `"${file.originalname}" is not allowed. ${DLV_ALLOWED_MSG}`));
+    }
+    cb(null, true);
+  },
+}).any();
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -127,6 +166,13 @@ function paymentView(p) {
   } : null;
 }
 
+export function proposalView(p) {
+  return p && {
+    id: p.id, milestone_id: p.milestone_id, action: p.action, status: p.status,
+    reason: p.reason, approved_by: p.approved_by ?? null, created_at: p.created_at,
+  };
+}
+
 export function milestoneView(m) {
   const d = D();
   const current = db.currentMilestone(m.project_id);
@@ -134,7 +180,8 @@ export function milestoneView(m) {
   const is_current = current?.id === m.id;
   const pays = d.payments.filter((p) => p.milestone_id === m.id);
   const dels = d.deliverables.filter((x) => x.milestone_id === m.id);
-  const version = dels.reduce((v, x) => Math.max(v, x.version), 0);
+  const versions = dels.reduce((v, x) => Math.max(v, x.version), 0);
+  const version = m.rev_count + 1; // current version: empty after a revision request until the freelancer re-uploads
   return {
     id: m.id, project_id: m.project_id, label: m.label, seq: m.seq, title: m.title,
     amount_minor: m.amount_minor, currency: m.currency, status: m.status,
@@ -146,7 +193,8 @@ export function milestoneView(m) {
       id: x.id, version: x.version, filename: x.filename, size: x.size, mime: x.mime, sha256: x.sha256,
       download_url: `/api/deliverables/${x.id}/download`,
     })),
-    versions: version,
+    versions,
+    proposal: proposalView([...d.proposals].reverse().find((p) => p.milestone_id === m.id && (p.status === 'pending' || p.status === 'approved'))) ?? null,
   };
 }
 
@@ -173,7 +221,7 @@ const money = (minor, cur) => new Intl.NumberFormat('en-US', { style: 'currency'
 
 // ---------------------------------------------------------------------------
 
-export function createRoutes({ paypal, ai }) {
+export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXTURES_DIR || FIXTURES }) {
   const r = express.Router();
 
   /** Run a PayPal call; any failure becomes 502 PAYPAL_ERROR with the debug id. */
@@ -448,8 +496,8 @@ export function createRoutes({ paypal, ai }) {
 
   // ---- Demo ----------------------------------------------------------------
   r.post('/demo', async (_req, res) => {
-    const text = fs.readFileSync(path.join(FIXTURES, 'baan-kafe.txt'), 'utf8');
-    const cache = path.join(FIXTURES, 'baan-kafe.extract.json');
+    const text = fs.readFileSync(path.join(fixturesDir, 'baan-kafe.txt'), 'utf8');
+    const cache = path.join(fixturesDir, 'baan-kafe.extract.json');
     const messages = ai.parseChatText(text, { freelancerName: 'Ploy' });
     let out;
     if (fs.existsSync(cache)) {
@@ -524,6 +572,101 @@ export function createRoutes({ paypal, ai }) {
       return { milestone: milestoneView(m), payment: paymentView(pay) };
     });
     res.json(payload);
+  });
+
+  // ---- Step 6: submit work -------------------------------------------------
+  const SUBMITTABLE = ['authorized', 'revision_requested'];
+
+  r.post('/milestones/:id/deliverables', async (req, res) => {
+    await parseUpload(req, res, deliverableUploader);
+    const m = getMilestone(req.params.id);
+    if (db.currentMilestone(m.project_id)?.id !== m.id || !SUBMITTABLE.includes(m.status)) {
+      throw E('NOT_SUBMITTABLE', 'Files can only be uploaded for the current milestone once it is funded (or after a revision request).', 409);
+    }
+    const files = req.files || [];
+    if (!files.length) throw E('BAD_FILE', 'Choose at least one file to upload.');
+    const checked = files.map((f) => ({ f, mime: checkDeliverable(f) }));
+    const version = m.rev_count + 1;
+    const rel = path.join(m.project_id, m.id, `v${version}`);
+    const dir = path.join(uploadsRoot(), rel);
+    fs.mkdirSync(dir, { recursive: true });
+    const d = D();
+    for (const { f, mime } of checked) {
+      const did = db.id('dlv');
+      const stored = path.join(rel, `${did}-${safeName(f.originalname)}`);
+      fs.writeFileSync(path.join(uploadsRoot(), stored), f.buffer);
+      d.deliverables.push({
+        id: did, project_id: m.project_id, milestone_id: m.id, version, filename: f.originalname,
+        size: f.buffer.length, mime, sha256: crypto.createHash('sha256').update(f.buffer).digest('hex'),
+        path: stored, created_at: now(),
+      });
+    }
+    db.save();
+    db.activity(m.project_id, 'free', `${m.label}: uploaded ${checked.length} file${checked.length === 1 ? '' : 's'} (version ${version})`);
+    res.status(201).json({ deliverables: milestoneView(m).deliverables, version });
+  });
+
+  r.post('/milestones/:id/submit', async (req, res) => {
+    const m = getMilestone(req.params.id);
+    const out = await once(`submit:${m.id}`, async () => {
+      if (db.currentMilestone(m.project_id)?.id !== m.id) {
+        throw E('NOT_CURRENT', 'Only the current milestone can be submitted.', 409);
+      }
+      if (!SUBMITTABLE.includes(m.status)) db.transition({ ...m }, 'submitted'); // throws ILLEGAL_TRANSITION
+      const version = m.rev_count + 1;
+      if (!D().deliverables.some((x) => x.milestone_id === m.id && x.version === version)) {
+        throw E('NO_FILES', 'Upload at least one file before submitting.', 409);
+      }
+      db.transition(m, 'submitted');
+      db.activity(m.project_id, 'free', `${m.label} submitted for review (version ${version})`);
+      db.notify(m.project_id, 'client', `${m.label} was delivered. Review the files and approve to pay ${money(m.amount_minor, m.currency)}.`);
+      const agent_run = await agent.runAgent('milestone.submitted', m.id);
+      const proposal = [...D().proposals].reverse().find((p) => p.milestone_id === m.id && p.action === 'release' && p.status === 'pending') ?? null;
+      return { milestone: milestoneView(m), proposal: proposalView(proposal), agent_run };
+    });
+    res.json(out);
+  });
+
+  // ---- Step 7: client reviews ---------------------------------------------
+  const DLV_ID = /^dlv_[a-f0-9]+$/;
+  r.get('/deliverables/:id/download', (req, res) => {
+    const id = req.params.id;
+    const row = DLV_ID.test(id) ? D().deliverables.find((x) => x.id === id) : null;
+    if (!row || !row.path) throw E('NOT_FOUND', 'File not found', 404);
+    const root = path.resolve(uploadsRoot());
+    const file = path.resolve(root, row.path); // row.path comes from the db, never from the request
+    if (!file.startsWith(root + path.sep) || !fs.existsSync(file)) throw E('NOT_FOUND', 'File not found', 404);
+    const disp = req.query.inline === '1' ? 'inline' : 'attachment';
+    const ascii = row.filename.replace(/[^\x20-\x7e]|["\;%]/g, '_');
+    res.set({
+      'Content-Type': row.mime,
+      'Content-Length': String(fs.statSync(file).size),
+      'Content-Disposition': `${disp}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
+      'X-Content-Type-Options': 'nosniff',
+    });
+    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+  });
+
+  r.post('/milestones/:id/revision', (req, res) => {
+    const m = getMilestone(req.params.id);
+    const note = (typeof req.body?.note === 'string' ? req.body.note : '').trim().slice(0, 1000);
+    if (note.length < 5) throw E('NOTE_TOO_SHORT', 'Tell the freelancer what to change (at least 5 characters).');
+    if (db.currentMilestone(m.project_id)?.id !== m.id) throw E('NOT_CURRENT', 'Only the current milestone can be reviewed.', 409);
+    db.transition({ ...m }, 'revision_requested'); // throws ILLEGAL_TRANSITION unless submitted
+    if (m.rev_limit != null && m.rev_count >= m.rev_limit) {
+      throw E('REVISION_LIMIT', `All ${m.rev_limit} revision rounds for ${m.label} are used.`, 409);
+    }
+    const items = Array.isArray(req.body?.items)
+      ? req.body.items.filter((x) => typeof x === 'string').map((x) => x.trim().slice(0, 200)).filter(Boolean).slice(0, 10) : [];
+    db.transition(m, 'revision_requested', { rev_count: m.rev_count + 1, rev_note: note, rev_items: items });
+    for (const p of D().proposals) {
+      if (p.milestone_id === m.id && p.action === 'release' && p.status === 'pending') p.status = 'withdrawn';
+    }
+    db.save();
+    const round = m.rev_limit != null ? `round ${m.rev_count} of ${m.rev_limit}` : `round ${m.rev_count}`;
+    db.activity(m.project_id, 'client', `${m.label}: revision requested (${round})`);
+    db.notify(m.project_id, 'freelancer', `Revision requested on ${m.label} (${round})`);
+    res.json({ milestone: milestoneView(m) });
   });
 
   // ---- Step 9: project page ------------------------------------------------

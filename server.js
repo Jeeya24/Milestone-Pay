@@ -6,11 +6,12 @@ import * as db from './db.js';
 import { labRouter } from './lab.js';
 import * as realPaypal from './paypal.js';
 import * as realAi from './ai.js';
+import * as realAgent from './agent.js';
 import { createRoutes } from './routes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ paypal = realPaypal, ai = realAi } = {}) {
+export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, fixturesDir } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -37,7 +38,7 @@ export function createApp({ paypal = realPaypal, ai = realAi } = {}) {
   });
 
   app.use('/api/lab', labRouter());
-  app.use('/api', createRoutes({ paypal, ai }));
+  app.use('/api', createRoutes({ paypal, ai, agent, ...(fixturesDir ? { fixturesDir } : {}) }));
 
   app.use(express.static(path.join(HERE, 'public')));
 

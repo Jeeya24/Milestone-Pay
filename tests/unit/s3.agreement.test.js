@@ -1,6 +1,8 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import * as db from '../../db.js';
 import { canonicalJson, agreementHash } from '../../routes.js';
 import { tmpEnv, startApp, aiStub, paypalStub, makeProject, approveBoth, fakeExtraction, PNG } from './helpers.js';
@@ -227,6 +229,12 @@ test('GET /projects totals come from the ledger; GET /projects/:id has the full 
 });
 
 test('POST /demo builds Baan Kafe from the cached extraction without calling the model', async () => {
+  // Never touch the real fixtures/ folder: use a temp copy with a stub cache.
+  const fx = fs.mkdtempSync(path.join(os.tmpdir(), 'mp-fx-'));
+  fs.copyFileSync(new URL('../../fixtures/baan-kafe.txt', import.meta.url), path.join(fx, 'baan-kafe.txt'));
+  fs.writeFileSync(path.join(fx, 'baan-kafe.extract.json'), JSON.stringify(fakeExtraction({ amounts: [24000, 32000, 24000] })));
+  await app.close();
+  app = await startApp({ paypal: paypalStub(), ai, fixturesDir: fx });
   const r = await app.call('POST', '/api/demo');
   assert.equal(r.status, 201);
   assert.equal(ai.calls.extract, 0);
