@@ -9,8 +9,8 @@ Each line is `[m<N>] Sender: text`. Cite messages only by their ids (`m1`, `m2`,
 ## What to return
 - `title`: short project title, for example "Baan Kafe website".
 - `client_name`, `freelancer_name`: first names as they appear in the chat.
-- `currency`: ISO code, "THB" for baht.
-- `total_minor`: agreed total price in the smallest unit, as an integer. 8,000 THB is 800000 (satang = baht x 100). Use the price the freelancer quoted and the client accepted. If no price was agreed, use 0.
+- `currency`: ISO code, "THB" for baht, "USD" for dollars ($).
+- `total_minor`: agreed total price in the smallest unit, as an integer. 8,000 THB is 800000 (satang = baht x 100); $800 is 80000 (cents = dollars x 100). Use the price the freelancer quoted and the client accepted. If no price was agreed, use 0.
 - `terms`: exactly these 7 entries, in this order, with these keys and labels: `scope` "Scope", `deliverables` "Deliverables", `price` "Price", `deadline` "Deadline", `payment` "Payment", `revisions` "Revisions", `assets` "Assets".
   - `value`: one concise English sentence or phrase. Use `null` when the chat does not settle it (then `source_message_ids` is an empty array).
   - `source_message_ids`: the ids of the messages that establish the value. Cite the message that states the fact, not one nearby. Price cites the message that states the amount; deadline cites the message that states the date; scope cites the message that lists what is built.

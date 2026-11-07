@@ -5,7 +5,7 @@ Source: the wireframe's `HOOD{}` plus its action functions, with SPEC.md taking 
 ## Conventions
 
 - JSON in and out. Errors always use the shape `{ "error": "CODE", "message": "human text" }` with the HTTP status listed.
-- Money is an **integer number of satang** in every field ending `_minor`, so 2,400 THB is `240000`. Never use floats. The conversion to a PayPal string (`"2400.00"`) happens only inside `paypal.js`.
+- Money is an **integer number of minor units** in every field ending `_minor`. **The app currency is USD** (owner decision 2026-11-07; `API_CURRENCY` env, default `USD`), so $240.00 is `24000` cents. Never use floats. The conversion to a PayPal string (`"240.00"`) happens only inside `paypal.js`. The frontend formats with `Intl.NumberFormat` using the currency in the data. An extracted agreement whose currency differs from `API_CURRENCY` is rejected with `422 CURRENCY_MISMATCH` (message tells the user to write the price in USD). Older examples below that say THB/satang read as USD/cents.
 - **Ids are globally unique random strings** (`prj_…`, `ms_…`, `agr_…`, `pay_…`, `dlv_…`, `prop_…`, `cr_…`). The display labels `M1`, `M2`… live in `label`. A label is never used as an id, a PayPal `custom_id` or part of a `PayPal-Request-Id`, because labels repeat across projects and seed runs.
 - Chat message ids inside a project are `m1`, `m2`… (`msg_id`). They are what citation chips point to.
 - Day 1 has no auth. The browser sends `party: "freelancer" | "client"` where an action depends on the role. The client view is `?as=client&p=<project_id>`.
@@ -64,7 +64,9 @@ Every other move throws. An accepted change order inserts a new milestone direct
 ## Endpoints
 
 ### Config and demo
-- `GET /api/config` → `200 { paypal_client_id, currency:"THB", api_currency:"THB"|"USD", env:"sandbox", budget:{ today_cost_usd, limit_usd:1, blocked:boolean } }`. The client id is public by design; no secret is ever returned.
+- `GET /api/config` → `200 { paypal_client_id, currency:"USD", api_currency:"USD", env:"sandbox", budget:{ today_cost_usd, limit_usd:1, blocked:boolean } }`. The client id is public by design; no secret is ever returned.
+- `GET /api/sandbox-login` → `200 { email, password }` of the **fake sandbox buyer** from `.env`, only when the request comes from localhost (else `403 FORBIDDEN`). The client's fund screen shows it next to the PayPal button so a tester knows what to type in the popup. Already implemented in `lab.js` as `/api/lab/test-login`; S4 adds this alias in `server.js`.
+- `/api/lab/*` and `public/lab.html` are the older single-page Test Lab. Leave them working; do not build on them.
 - `POST /api/demo` → `201 { project_id }`. Creates the Baan Kafe project from `fixtures/baan-kafe.txt` and runs extract. It uses a cached extraction from `fixtures/baan-kafe.extract.json` if that file exists, otherwise a live call.
 
 ### Step 1: Dashboard

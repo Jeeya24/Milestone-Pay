@@ -1,5 +1,5 @@
 // PayPal sandbox smoke: order->authorize->capture, order->authorize->void, capture->refund.
-// Usage: node scripts/smoke.js   (API_CURRENCY=USD to override THB)
+// Usage: node scripts/smoke.js   (USD by default; API_CURRENCY=THB to override)
 // Prints ids only; never prints credentials or auth headers.
 import 'dotenv/config';
 import crypto from 'node:crypto';

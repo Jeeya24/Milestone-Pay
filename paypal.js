@@ -5,7 +5,7 @@ import { PayPalAgentToolkit } from '@paypal/agent-toolkit/ai-sdk';
 const BASE = 'https://api-m.sandbox.paypal.com';
 
 export function currency() {
-  return process.env.API_CURRENCY || 'THB';
+  return process.env.API_CURRENCY || 'USD';
 }
 
 /** satang (integer) -> { currency_code, value:"2400.00" }. Integer arithmetic only. */

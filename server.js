@@ -3,6 +3,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
+import { labRouter } from './lab.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,8 +14,8 @@ export function createApp() {
   app.get('/api/config', (_req, res) => {
     res.json({
       paypal_client_id: process.env.PAYPAL_CLIENT_ID || '',
-      currency: 'THB',
-      api_currency: process.env.API_CURRENCY || 'THB',
+      currency: process.env.API_CURRENCY || 'USD',
+      api_currency: process.env.API_CURRENCY || 'USD',
       env: 'sandbox',
       budget: {
         today_cost_usd: db.todayCostUsd(),
@@ -31,6 +32,8 @@ export function createApp() {
     const runs = db.aiRunsOn(date);
     res.json({ runs, total_cost_usd: runs.reduce((s, r) => s + (r.cost_usd || 0), 0) });
   });
+
+  app.use('/api/lab', labRouter());
 
   app.use(express.static(path.join(HERE, 'public')));
 

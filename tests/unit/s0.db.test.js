@@ -94,7 +94,7 @@ test('GET /api/config has the right shape and never contains the secret', async 
     assert.ok(!/secret/i.test(text));
     const j = JSON.parse(text);
     assert.equal(j.paypal_client_id, 'pub-client-id');
-    assert.equal(j.currency, 'THB');
+    assert.equal(j.currency, process.env.API_CURRENCY || 'USD');
     assert.equal(j.env, 'sandbox');
     assert.deepEqual(j.budget, { today_cost_usd: 0, limit_usd: 1, blocked: false });
   });
