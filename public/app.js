@@ -32,7 +32,7 @@ function parseMinor(s) {
 const major = (minor) => (minor / 100).toFixed(2);
 
 async function api(path, opts = {}) {
-  const init = { method: opts.method || (opts.body !== undefined ? 'POST' : 'GET') };
+  const init = { method: opts.method || (opts.body !== undefined || opts.form ? 'POST' : 'GET') };
   if (opts.form) init.body = opts.form;
   else if (opts.body !== undefined) { init.headers = { 'Content-Type': 'application/json' }; init.body = JSON.stringify(opts.body); }
   let res;
@@ -129,8 +129,8 @@ async function viewDash() {
   const list = projects.length
     ? projects.map((p) => el('div', { class: 'card row', style: 'justify-content:space-between' },
         el('div', {},
-          el('b', {}, p.title || 'Untitled project'),
-          el('span', { class: 'muted small' }, ` · ${p.client || 'client'} · ${money(p.total_minor || 0, cur)}`), el('br'),
+          el('b', {}, p.title || 'Unfinished chat import'),
+          el('span', { class: 'muted small' }, p.title ? ` · ${p.client || 'client'} · ${money(p.total_minor || 0, cur)}` : ' · the agreement was not created yet. Open it to try again.'), el('br'),
           (p.milestones || []).map((m) => [el('span', { class: `pill ${m.status}` }, `${m.label} ${pillText(m.status)}`), ' ']),
           p.open_change_request && p.open_change_request.from === 'client' && p.open_change_request.status === 'open'
             ? el('button', { class: 'badge-btn', onclick: () => go(`/p/${p.id}/scope`) }, `● ${p.client || 'Client'} requested a change`) : null),
@@ -565,7 +565,7 @@ function runsCard(d) {
       el('div', { class: 'row small', style: 'gap:6px' }, el('b', {}, `${ms.get(r.milestone_id)?.label || ''} ${EVENT_TEXT[r.event] || r.event}`.trim()),
         el('span', { class: 'badge', title: r.mode === 'fallback' ? 'The AI model was too slow or failed, so fixed rules ran instead' : 'The AI model chose the steps' }, r.mode === 'fallback' ? 'fallback rules' : 'AI model'),
         el('span', { class: 'muted' }, fmtDateTime(r.at))),
-      el('ol', { class: 'trace' }, (r.steps || []).map((s) => el('li', {}, s.ok === false ? '✗ ' : '✓ ', STEP_TEXT[s.tool] || 'Ran a step', s.ok === false && s.result?.error ? el('span', { class: 'muted' }, ` (${s.result.error})`) : null)))))
+      el('ol', { class: 'trace' }, (r.steps || []).map((s) => el('li', {}, s.ok === false ? '✗ ' : '✓ ', (s.tool === 'notify' ? TOOL_TEXT.notify(s) : STEP_TEXT[s.tool]) || 'Ran a step', s.ok === false && s.result?.error ? el('span', { class: 'muted' }, ` (${s.result.error})`) : null)))))
       : el('p', { class: 'muted small' }, 'The agent has not run yet. It runs when work is submitted or the client decides.'),
     el('p', { class: 'small muted', style: 'margin:6px 0 0' }, 'AI cost so far: ', el('b', {}, usd(d.ai_cost?.cost_usd)), ` over ${d.ai_cost?.calls ?? 0} AI call${d.ai_cost?.calls === 1 ? '' : 's'}.`));
 }
@@ -938,7 +938,14 @@ function changeForm(d, fname) {
 const TOOL_TEXT = {
   get_order: () => 'Checked the PayPal order', propose_release: () => 'Asked for your approval',
   capture_authorization: (s, m) => `Captured ${money(m?.amount_minor ?? 0, m?.currency || 'USD')} from the PayPal hold`,
-  void_authorization: () => 'Released the PayPal hold', notify: () => 'Told both sides',
+  void_authorization: () => 'Released the PayPal hold',
+  notify: (s) => ({
+    paid_freelancer: 'Told the freelancer they were paid',
+    fund_next_client: 'Asked the client to fund the next part',
+    voided_both: 'Told both sides the hold was released',
+    review_client: 'Asked the client to review the work',
+    problem_freelancer: 'Flagged a problem to the freelancer',
+  })[s?.args?.template] || 'Sent an update',
 };
 function releaseTrace(rel, cur) {
   const steps = rel.agent_run?.steps || [];

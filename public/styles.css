@@ -191,7 +191,12 @@ body.embed .wrap.narrow{padding-top:10px}
 @media (max-width:1100px){
   body.judge #stage{flex-direction:column}
   body.judge #deskPane{width:100%;flex:none}
-  body.judge #phonePane{position:static;flex:none;align-self:center}
+  body.judge #phonePane{position:static;flex:none;align-self:center;max-width:100%}
+  body.judge #phonePane iframe{max-width:100%}
+}
+@media (max-width:440px){
+  body.judge #stage{padding:10px 8px}
+  body.judge #phonePane{width:100%}
 }
 @media (max-width:720px){
   .tl .axis{padding-left:96px}

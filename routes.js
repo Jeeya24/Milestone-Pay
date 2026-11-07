@@ -828,6 +828,9 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     if (text.length < 5) throw E('MESSAGE_TOO_SHORT', 'Describe the change in at least 5 characters.');
     const cr = await once(`cr:${p.id}`, async () => {
       if (agreementOf(p.id)?.status !== 'approved') throw E('AGREEMENT_NOT_APPROVED', 'Change requests are only possible after both sides approved the agreement.', 409);
+      if (D().milestones.some((m) => m.project_id === p.id && m.status === 'voided')) {
+        throw E('PROJECT_STOPPED', 'This project was cancelled, so it cannot take change requests.', 409);
+      }
       if (D().change_requests.some((c) => c.project_id === p.id && crOpen(c))) {
         throw E('OPEN_REQUEST_EXISTS', 'Finish or close the open change request first.', 409);
       }
