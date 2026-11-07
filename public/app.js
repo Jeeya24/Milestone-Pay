@@ -37,7 +37,7 @@ async function api(path, opts = {}) {
   try { res = await fetch(path, init); }
   catch { throw Object.assign(new Error('Could not reach the server. Check that it is running and try again.'), { code: 'NETWORK' }); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.message || `Something went wrong (${res.status}).`), { code: data.error, status: res.status, data });
+  if (!res.ok) throw Object.assign(new Error(data.message || (res.status === 404 ? 'This action is not available on the server yet (404).' : `Something went wrong (${res.status}).`)), { code: data.error, status: res.status, data });
   return data;
 }
 
@@ -55,12 +55,41 @@ function copyText(text, label) {
 }
 function showModal(...nodes) { $('#modalBody').replaceChildren(...nodes); $('#modal').classList.add('show'); }
 function closeModal() { $('#modal').classList.remove('show'); }
-const pillText = (s) => String(s).replace('_', ' ');
+const STATUS_TEXT = { draft: 'Draft', agreed: 'Waiting for payment', authorized: 'Paid into hold', submitted: 'Delivered – in review',
+  revision_requested: 'Revision requested', paid: 'Paid ✓', voided: 'Cancelled – not charged', refunded: 'Refunded',
+  sent: 'Sent to client', approved: 'Approved by both', active: 'In progress', completed: 'Completed', stopped: 'Stopped' };
+const pillText = (s) => STATUS_TEXT[s] || 'In progress';
 const pill = (s) => el('span', { class: `pill ${s}` }, pillText(s));
+const fmtDate = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }); };
+const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+const ACCEPT = /\.(pdf|png|jpe?g|zip|mp4)$/i;
+const MAX_BYTES = 20 * 1024 * 1024;
+const viewUrl = (u) => u + (u.includes('?') ? '&' : '?') + 'inline=1';
+const sigOf = (d) => JSON.stringify([d.project?.status, d.agreement?.status, (d.milestones || []).map((m) => [m.id, m.status, m.rev_count, m.rev_note, m.payment?.status, m.fundable, m.proposal?.id, m.proposal?.status, (m.deliverables || []).map((f) => f.id)]), (d.notifications || []).length]);
+
+// Poll the project every 3 s while the tab is visible and something is pending. Redraws only when data changed.
+let pollTimer = null;
+function startPoll(pid, shouldPoll, getSig, setData, redraw, isBusy) {
+  stopPoll();
+  pollTimer = setInterval(async () => {
+    if (document.hidden || isBusy()) return;
+    try {
+      const d = await api(`/api/projects/${pid}`);
+      if (isBusy() || !shouldPoll(d)) { if (!shouldPoll(d)) { const changed = sigOf(d) !== getSig(); setData(d); if (changed) redraw(); stopPoll(); } return; }
+      if (sigOf(d) !== getSig()) { setData(d); redraw(); }
+    } catch { /* keep the screen as is; try again next tick */ }
+  }, 3000);
+}
+function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
+function keepFocus(fn) {
+  const a = document.activeElement; const id = a && a.id; const pos = a && a.selectionStart;
+  fn();
+  if (id) { const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch {} } }
+}
 
 // ---------------------------------------------------------------- freelancer routing
 function route() {
-  closeModal();
+  closeModal(); stopPoll();
   const h = location.hash.replace(/^#/, '') || '/';
   if (h === '/new') return viewNew();
   const m = /^\/p\/([\w-]+)/.exec(h);
@@ -182,13 +211,19 @@ function viewNew() {
 }
 
 // ---------------------------------------------------------------- review (vReview)
-const R = { data: null, hl: null, tr: false };
+const R = { data: null, hl: null, tr: false, showAgreement: false, pid: null };
 async function viewReview(pid) {
   mount(el('div', { class: 'wrap' }, loadingBox('Loading the agreement…')));
-  try { R.data = await api(`/api/projects/${pid}`); R.hl = null; R.tr = false; }
+  try { R.data = await api(`/api/projects/${pid}`); R.hl = null; R.tr = false; R.showAgreement = false; R.pid = pid; Pj.picked = []; Pj.err = null; Pj.msg = null; Pj.upPct = null; Pj.busy = false; }
   catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: () => viewReview(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
-  drawReview();
+  renderFreelancer();
+  if (['sent', 'active'].includes(R.data.project?.status)) startPoll(pid, (d) => d.project?.status === 'sent' || d.project?.status === 'active', () => sigOf(R.data), (d) => { R.data = d; }, () => keepFocus(renderFreelancer), () => Pj.busy);
 }
+function renderFreelancer() {
+  const a = R.data.agreement;
+  if (a && a.status === 'approved' && !R.showAgreement) drawProject(); else drawReview();
+}
+
 function drawReview(err) {
   const { project, agreement, messages = [], milestones = [] } = R.data;
   if (!agreement) {
@@ -241,10 +276,22 @@ function drawReview(err) {
   const mismatch = sum !== body.total_minor;
   const mismatchBox = el('div');
   const sumLabel = el('span', {}, `total ${money(sum, cur)}`);
+  const apHint = el('span', { class: 'muted small' }, ' This freezes version 1. Amounts can no longer be changed.');
+  const apBtn = frozen ? null : el('button', { class: 'primary', id: 'apBtn', onclick: async (ev) => {
+    ev.target.disabled = true; ev.target.textContent = 'Sending…';
+    try {
+      const r = await api(`/api/agreements/${agreement.id}/approve`, { body: { party: 'freelancer' } });
+      R.data.agreement = r.agreement; drawReview();
+    } catch (e) { drawReview(e); }
+  } }, 'Approve & send to client');
   const setMismatch = (s) => {
     sumLabel.textContent = `total ${money(s, cur)}`;
-    mismatchBox.replaceChildren(s !== body.total_minor
-      ? el('div', { class: 'gap' }, `Milestones add up to ${money(s, cur)}, but the chat agreed ${money(body.total_minor, cur)}. The client will see the new total.`) : '');
+    const small = milestones.some((x) => x.amount_minor < 100);
+    const bad = s !== body.total_minor;
+    mismatchBox.replaceChildren(bad
+      ? el('div', { class: 'gap' }, `The parts add up to ${money(s, cur)} but the agreed total is ${money(body.total_minor, cur)}. Fix the amounts first.`)
+      : small ? el('div', { class: 'gap' }, `Each part must be at least ${money(100, cur)}.`) : '');
+    if (apBtn) { apBtn.disabled = bad || small; apHint.textContent = bad || small ? ' Fix the amounts above to enable this.' : ' This freezes version 1. Amounts can no longer be changed.'; }
   };
   const msEls = milestones.map((m) => {
     const amt = frozen ? el('span', {}, money(m.amount_minor, cur)) : el('input', { class: 'amt', type: 'text', inputmode: 'decimal', value: major(m.amount_minor), 'aria-label': `${m.label} amount in ${cur}` });
@@ -272,20 +319,12 @@ function drawReview(err) {
           el('a', { href: clientUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, 'Open client view'))),
         agreement.content_hash ? el('div', { style: 'margin-top:6px' }, 'Fingerprint ', el('span', { class: 'hash' }, agreement.content_hash.slice(0, 22) + '…')) : null));
   } else {
-    approveArea = el('div', {},
-      el('button', { class: 'primary', id: 'apBtn', onclick: async (ev) => {
-        ev.target.disabled = true; ev.target.textContent = 'Sending…';
-        try {
-          const r = await api(`/api/agreements/${agreement.id}/approve`, { body: { party: 'freelancer' } });
-          R.data.agreement = r.agreement; drawReview();
-        } catch (e) { drawReview(e); }
-      } }, 'Approve & send to client'),
-      el('span', { class: 'muted small' }, ' This freezes version 1. Amounts can no longer be changed.'));
+    approveArea = el('div', {}, apBtn, apHint);
   }
 
   mount(el('div', { class: 'wrap' },
     el('div', { class: 'row', style: 'justify-content:space-between' },
-      el('div', {}, el('button', { class: 'ghost small', onclick: () => go('/') }, '← All projects'), el('h2', { style: 'margin-top:8px' }, body.title || 'Agreement draft')),
+      el('div', {}, agreement.status === 'approved' ? el('button', { class: 'ghost small', onclick: () => { R.showAgreement = false; renderFreelancer(); } }, '← Back to project') : el('button', { class: 'ghost small', onclick: () => go('/') }, '← All projects'), el('h2', { style: 'margin-top:8px' }, body.title || 'Agreement draft')),
       pill(frozen ? agreement.status : 'draft')),
     err ? errBox(err) : null,
     el('div', { class: 'col2' },
@@ -303,6 +342,133 @@ function drawReview(err) {
           frozen ? null : el('p', { class: 'small muted' }, 'The AI split is shown. You can change any amount before approving.')),
         approveArea))));
   if (R.hl) setTimeout(() => { const n = document.getElementById(`msg-${R.hl}`); if (n) n.scrollIntoView({ block: 'nearest' }); }, 0);
+}
+
+// ---------------------------------------------------------------- freelancer project page (vSubmit + project)
+const Pj = { picked: [], err: null, upPct: null, busy: false, msg: null };
+
+function notesBox(d, to) {
+  const list = (d.notifications || []).filter((n) => n.to === to).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 3);
+  if (!list.length) return null;
+  return el('div', { class: 'notes' }, el('b', {}, 'Latest updates'),
+    list.map((n) => el('div', { class: 'note' }, el('span', { class: 'muted' }, `${fmtDate(n.at)} · `), n.text)));
+}
+function fileRow(f) {
+  return el('div', { class: 'frow' },
+    el('span', { class: 'thumb' }, (f.filename.split('.').pop() || '').slice(0, 4).toUpperCase()),
+    el('span', { class: 'fname', title: f.filename }, f.filename),
+    el('span', { class: 'muted' }, fmtSize(f.size)),
+    el('a', { href: viewUrl(f.download_url), target: '_blank', rel: 'noopener' }, 'View'),
+    el('a', { href: f.download_url }, 'Download'));
+}
+function holdLine(m, cur) {
+  const p = m.payment;
+  if (!p || !['authorized', 'submitted', 'revision_requested'].includes(m.status)) return null;
+  return el('p', { class: 'small', style: 'margin:4px 0' }, `PayPal is holding ${money(m.amount_minor, m.currency || cur)}`,
+    p.expires_at ? ` · hold expires ${fmtDate(p.expires_at)}` : '', el('span', { class: 'muted' }, ' · the client is not charged until they approve the work'));
+}
+
+function uploadFiles(m) {
+  const fd = new FormData();
+  Pj.picked.forEach((f) => fd.append('files[]', f, f.name));
+  Pj.busy = true; Pj.err = null; Pj.upPct = 0; drawProject();
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', `/api/milestones/${m.id}/deliverables`);
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) { Pj.upPct = Math.round((e.loaded / e.total) * 100); const b = document.getElementById('upBar'); if (b) { b.value = Pj.upPct; document.getElementById('upTxt').textContent = Pj.upPct < 100 ? `Uploading… ${Pj.upPct}%` : 'Checking the files…'; } } };
+  const fail = (msg) => { Pj.busy = false; Pj.upPct = null; Pj.err = msg; drawProject(); };
+  xhr.onerror = () => fail('Could not reach the server. Check that it is running and try again.');
+  xhr.onload = async () => {
+    let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status < 200 || xhr.status >= 300) return fail(data.message || `Upload failed (${xhr.status}).`);
+    Pj.picked = []; Pj.upPct = null; Pj.busy = false;
+    try { R.data = await api(`/api/projects/${R.pid}`); } catch (e) { Pj.err = e.message; }
+    drawProject();
+  };
+  xhr.send(fd);
+}
+async function submitWork(m) {
+  Pj.busy = true; Pj.err = null; drawProject();
+  try {
+    await api(`/api/milestones/${m.id}/submit`, { body: {} });
+    Pj.msg = `${m.label} was sent for review.`;
+  } catch (e) { Pj.err = e.message + (e.code ? ` (${e.code})` : ''); }
+  Pj.busy = false;
+  try { R.data = await api(`/api/projects/${R.pid}`); } catch {}
+  drawProject();
+}
+
+function submitPanel(m, d) {
+  const cur = d.agreement?.body?.currency || CFG?.currency || 'USD';
+  const clientName = d.project.client || 'the client';
+  const revising = m.status === 'revision_requested';
+  const fileIn = el('input', { type: 'file', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.zip,.mp4', id: 'fileIn', disabled: Pj.busy, onchange: (ev) => {
+    for (const f of ev.target.files) {
+      if (!ACCEPT.test(f.name)) { toast(`${f.name}: only PDF, PNG, JPG, ZIP or MP4 files`); continue; }
+      if (f.size > MAX_BYTES) { toast(`${f.name} is over 20 MB`); continue; }
+      Pj.picked.push(f);
+    }
+    ev.target.value = ''; drawProject();
+  } });
+  const picked = Pj.picked.map((f, i) => el('div', { class: 'frow' },
+    el('span', { class: 'thumb' }, (f.name.split('.').pop() || '').slice(0, 4).toUpperCase()), el('span', { class: 'fname' }, f.name),
+    el('span', { class: 'muted' }, fmtSize(f.size)), el('button', { class: 'ghost', disabled: Pj.busy, onclick: () => { Pj.picked.splice(i, 1); drawProject(); }, 'aria-label': `Remove ${f.name}` }, '✕')));
+  const ver = m.rev_count + 1;
+  return el('div', { class: 'card' },
+    el('h4', {}, `${m.label} · send your work`),
+    revising ? el('div', { class: 'gap' }, el('b', {}, `${clientName} asked for changes`), ` (revision ${m.rev_count}${m.rev_limit ? ` of ${m.rev_limit}` : ''}):`, el('br'), m.rev_note || '(no note)') : null,
+    el('div', { class: 'col2' },
+      el('div', {}, el('h4', {}, 'What was agreed'), el('ul', { class: 'small' }, (m.criteria || []).map((c) => el('li', {}, c))),
+        el('p', { class: 'small muted' }, `${clientName} checks your files against this list. No AI review.`)),
+      el('div', {},
+        el('h4', {}, `Your files · version ${ver}`),
+        m.deliverables.length ? m.deliverables.map(fileRow) : el('p', { class: 'small muted' }, revising ? 'Nothing uploaded for this revision yet.' : 'No files uploaded yet.'),
+        el('div', { class: 'drop' }, el('b', { class: 'small' }, 'Add files'), el('div', { class: 'muted small' }, 'PDF, PNG, JPG, ZIP or MP4. Up to 20 MB each. Files you upload are added to this version.'),
+          el('div', { style: 'margin-top:6px' }, fileIn), picked),
+        Pj.busy && Pj.upPct != null ? el('div', { class: 'small', style: 'margin-top:6px' }, el('span', { id: 'upTxt' }, `Uploading… ${Pj.upPct}%`), el('progress', { id: 'upBar', max: 100, value: Pj.upPct, style: 'width:100%' })) : null,
+        el('div', { class: 'row', style: 'margin-top:8px' },
+          el('button', { disabled: Pj.busy || !Pj.picked.length, onclick: () => uploadFiles(m) }, Pj.picked.length ? `Upload ${Pj.picked.length} file${Pj.picked.length === 1 ? '' : 's'}` : 'Upload'),
+          el('button', { class: 'primary', disabled: Pj.busy || !m.deliverables.length || Pj.picked.length > 0, onclick: () => submitWork(m) }, Pj.busy && Pj.upPct == null ? 'Sending…' : 'Submit for review')),
+        Pj.picked.length ? el('p', { class: 'small muted' }, 'Upload your chosen files first, then submit.') : null,
+        Pj.err ? errBox({ message: Pj.err }) : null)));
+}
+
+function drawProject() {
+  const d = R.data; const { project, agreement, milestones = [] } = d;
+  const cur = agreement.body.currency || CFG?.currency || 'USD';
+  const clientName = project.client || 'the client';
+  const clientUrl = `${location.origin}/?as=client&p=${project.id}`;
+  const cards = milestones.map((m) => {
+    const card = el('div', { class: `ms${m.is_current ? ' cur' : ''}` },
+      el('div', { class: 'top' }, el('b', {}, `${m.label} · ${m.title}`), el('span', { class: 'row', style: 'gap:8px' }, money(m.amount_minor, m.currency || cur), pill(m.status))),
+      holdLine(m, cur));
+    if (m.status === 'agreed') card.append(el('p', { class: 'small muted', style: 'margin:4px 0 0' }, m.fundable ? `Waiting for ${clientName} to pay ${money(m.amount_minor, m.currency || cur)} into PayPal hold. Start once it shows "Paid into hold".` : 'Unlocks after the previous part is paid.'));
+    if (m.status === 'submitted') {
+      card.append(el('p', { class: 'small', style: 'margin:6px 0' }, `✓ Sent. Waiting for ${clientName} to review.`), ...m.deliverables.map(fileRow));
+    }
+    if (m.status === 'paid') {
+      card.append(el('p', { class: 'small', style: 'margin:4px 0', 'data-capture': '' }, `Paid ${money(m.amount_minor, m.currency || cur)}`, m.payment?.capture_id ? el('span', { class: 'muted' }, ` · PayPal capture ${m.payment.capture_id}`) : null));
+      if (m.deliverables.length) card.append(el('details', {}, el('summary', { class: 'muted small', style: 'cursor:pointer' }, `Files (${m.deliverables.length})`), m.deliverables.map(fileRow)));
+    }
+    if (m.status === 'voided') card.append(el('p', { class: 'small', style: 'margin:4px 0' }, `${clientName} cancelled this part. The PayPal hold was released and nothing was charged. Later parts will not start.`));
+    return card;
+  });
+  const cur_m = milestones.find((m) => m.is_current && ['authorized', 'revision_requested'].includes(m.status));
+  const allPaid = milestones.length && milestones.every((m) => m.status === 'paid');
+  mount(el('div', { class: 'wrap' },
+    el('div', { class: 'row', style: 'justify-content:space-between' },
+      el('div', {}, el('button', { class: 'ghost small', onclick: () => go('/') }, '← All projects'), el('h2', { style: 'margin-top:8px' }, agreement.body.title || project.title || 'Project')),
+      pill(project.status)),
+    Pj.msg && milestones.some((m) => m.is_current && m.status === 'submitted') ? el('div', { class: 'okbox' }, Pj.msg) : null,
+    notesBox(d, 'freelancer'),
+    allPaid ? el('div', { class: 'okbox' }, 'All parts are delivered and paid. Files stay available on this page.') : null,
+    cur_m ? submitPanel(cur_m, d) : null,
+    el('h4', { style: 'margin-top:14px' }, 'Milestones'),
+    milestones.length ? cards : el('div', { class: 'empty' }, el('b', {}, 'No milestones'), 'This agreement has no milestones.'),
+    el('div', { class: 'card' }, el('h4', {}, 'Client link'),
+      el('div', { class: 'linkbox' }, el('input', { readonly: true, value: clientUrl, 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
+        el('button', { onclick: () => copyText(clientUrl, 'Client link') }, 'Copy link'),
+        el('a', { href: clientUrl, target: '_blank', rel: 'noopener' }, el('button', {}, 'Open client view')),
+        el('button', { class: 'ghost', onclick: () => { R.showAgreement = true; renderFreelancer(); } }, 'View agreement')))));
 }
 
 // ---------------------------------------------------------------- client view (vClient)
@@ -327,9 +493,14 @@ async function viewClient() {
   let d;
   try { d = await api(`/api/projects/${CLIENT_PID}`); }
   catch (e) { return mount(el('div', { class: 'wrap narrow' }, errBox(e), el('button', { onclick: viewClient }, 'Try again'))); }
+  C.msg = null; C.err = null;
   drawClient(d);
+  startPoll(CLIENT_PID, (x) => ['sent', 'active'].includes(x.project?.status), () => sigOf(C.d), (x) => { C.d = x; }, redrawClient, () => C.busy);
 }
+const C = { d: null, msg: null, err: null, errFor: null, busy: false, revOpen: false, note: '', release: null };
+function redrawClient() { keepFocus(() => drawClient(C.d)); }
 function drawClient(d, msg) {
+  C.d = d; if (msg) C.msg = msg;
   const { project, agreement, milestones = [] } = d;
   const wrap = el('div', { class: 'wrap narrow' });
   if (!agreement || agreement.status === 'draft') {
@@ -339,7 +510,6 @@ function drawClient(d, msg) {
   }
   const b = agreement.body; const cur = b.currency || CFG?.currency || 'USD';
   wrap.append(el('div', { class: 'small muted' }, `${b.title || 'Project'} · from ${b.freelancer_name || 'freelancer'}`), el('h3', {}, 'Agreement'));
-  if (msg) wrap.append(msg);
 
   const get = (k) => (b.terms || []).find((t) => t.key === k)?.value;
   const summary = el('div', { class: 'card small' },
@@ -362,15 +532,23 @@ function drawClient(d, msg) {
     return mount(wrap);
   }
 
-  wrap.append(el('div', { class: 'small', style: 'margin-bottom:8px' }, '✓ Agreement approved'), el('h4', { style: 'margin-top:12px' }, 'Payments'));
+  wrap.append(el('div', { class: 'small', style: 'margin-bottom:8px' }, '✓ Agreement approved'));
+  if (C.release) wrap.append(releaseTrace(C.release, cur));
+  if (C.msg) wrap.append(C.msg);
+  const notes = notesBox(d, 'client'); if (notes) wrap.append(notes);
+  wrap.append(el('h4', { style: 'margin-top:12px' }, 'Payments'));
   const buttons = [];
+  const fname = b.freelancer_name || project.freelancer_name || 'the freelancer';
   milestones.forEach((m) => {
     const card = el('div', { class: 'ms small' });
     card.append(el('div', { class: 'top' }, el('b', {}, `${m.label} ${m.title}`), pill(m.status)));
     const line = el('div', { class: 'row', style: 'justify-content:space-between;margin-top:4px' }, el('span', {}, money(m.amount_minor, m.currency || cur)));
-    const note = { authorized: 'held by PayPal · work in progress', submitted: 'delivered · waiting for your review', revision_requested: 'held · being revised', paid: 'paid ✓', voided: 'cancelled · hold released', refunded: 'refunded' }[m.status];
+    const left = m.rev_limit != null ? Math.max(0, m.rev_limit - m.rev_count) : null;
+    const note = { authorized: `PayPal is holding this · ${fname} is working`, submitted: 'delivered · waiting for your review', revision_requested: `held · ${fname} is revising`, paid: 'paid ✓', voided: 'cancelled · hold released', refunded: 'refunded' }[m.status];
     if (note) line.append(el('span', { class: 'muted' }, note));
     card.append(line);
+    if (['authorized', 'submitted', 'revision_requested'].includes(m.status) && m.payment?.expires_at) card.append(el('div', { class: 'muted', style: 'font-size:11px' }, `Hold expires ${fmtDate(m.payment.expires_at)}. You are not charged unless you approve.`));
+    if (m.status === 'revision_requested') card.append(el('div', { class: 'gap', style: 'margin-top:6px' }, el('b', {}, 'Your note: '), m.rev_note || '', el('br'), `Round ${m.rev_count}${m.rev_limit != null ? ` of ${m.rev_limit}` : ''}. ${fname} will upload new files.`));
     if (m.fundable) {
       const slot = el('div', { class: 'pp-wrap' }, loadingBox('Loading the PayPal button…'));
       const err = el('div');
@@ -384,16 +562,61 @@ function drawClient(d, msg) {
       const earlier = milestones.filter((x) => x.seq < m.seq && x.status !== 'paid').pop();
       card.append(el('div', { class: 'lockline' }, `Unlocks after ${earlier ? earlier.label : 'the previous part'} is paid`));
     } else if (m.status === 'draft') card.append(el('div', { class: 'lockline' }, 'Waiting for the agreement to be approved'));
-    if (m.deliverables?.length && m.status !== 'draft') {
-      card.append(el('details', { style: 'margin-top:6px' }, el('summary', { class: 'muted', style: 'cursor:pointer' }, `Files (${m.deliverables.length})`),
-        m.deliverables.map((f) => el('div', { class: 'frow' }, el('span', { class: 'fname' }, f.filename),
-          el('a', { href: f.download_url }, 'Download')))));
+    if (m.status === 'submitted') card.append(reviewCard(m, d, cur, fname, left));
+    else if (m.deliverables?.length && m.status !== 'draft') {
+      card.append(el('details', { style: 'margin-top:6px' }, el('summary', { class: 'muted', style: 'cursor:pointer' }, `Files (${m.deliverables.length})`), m.deliverables.map(fileRow)));
     }
     wrap.append(card);
   });
   wrap.append(el('p', { style: 'text-align:center' }, el('button', { class: 'ghost small', onclick: viewClient }, 'Refresh')));
   mount(wrap);
   buttons.forEach((x) => mountPayPal(x, d));
+}
+
+const TOOL_TEXT = {
+  get_order: () => 'Checked the PayPal order', propose_release: () => 'Asked for your approval',
+  capture_authorization: (s, m) => `Captured ${money(m?.amount_minor ?? 0, m?.currency || 'USD')} from the PayPal hold`,
+  void_authorization: () => 'Released the PayPal hold', notify: () => 'Told both sides',
+};
+function releaseTrace(rel, cur) {
+  const steps = rel.agent_run?.steps || [];
+  return el('div', { class: 'okbox' }, el('b', {}, `✓ ${rel.milestone?.label || 'Milestone'} approved and paid`),
+    el('ol', { class: 'trace' }, steps.map((s) => el('li', {}, s.ok === false ? '✗ ' : '✓ ', (TOOL_TEXT[s.tool] || (() => 'Ran a step'))(s, rel.milestone)))),
+    rel.payment?.capture_id ? el('div', { class: 'small' }, 'PayPal capture id ', el('span', { class: 'hash' }, rel.payment.capture_id)) : null,
+    rel.next ? el('div', { class: 'small', style: 'margin-top:6px' }, el('b', {}, `Next: fund ${rel.next.label} ${rel.next.title} (${money(rel.next.amount_minor, rel.milestone?.currency || cur)}).`), ' The PayPal button is below.')
+      : el('div', { class: 'small', style: 'margin-top:6px' }, 'That was the last part. Everything is paid.'));
+}
+
+function reviewCard(m, d, cur, fname, left) {
+  const prop = m.proposal && m.proposal.action === 'release' && m.proposal.status === 'pending' ? m.proposal : null;
+  const errSlot = C.err && C.errFor === m.id ? errBox({ message: C.err }) : null;
+  const act = async (fn) => { C.busy = true; C.err = null; C.msg = null; redrawClient(); try { await fn(); } catch (e) { C.err = e.message + (e.code && e.code !== 'NETWORK' ? ` (${e.code})` : ''); C.errFor = m.id; } C.busy = false; try { C.d = await api(`/api/projects/${CLIENT_PID}`); } catch {} redrawClient(); };
+  const noteIn = el('textarea', { id: 'revNote', rows: 3, maxlength: 1000, placeholder: 'Tell them what to change (at least 5 characters)', value: C.note, disabled: C.busy, oninput: (e) => { C.note = e.target.value; sendBtn.disabled = C.busy || C.note.trim().length < 5; } });
+  const sendBtn = el('button', { class: 'primary', disabled: C.busy || C.note.trim().length < 5, onclick: () => act(async () => {
+    await api(`/api/milestones/${m.id}/revision`, { body: { note: C.note.trim() } });
+    C.note = ''; C.revOpen = false; C.msg = el('div', { class: 'okbox' }, `Revision requested. ${fname} will upload new files. PayPal keeps holding the money.`);
+  }) }, 'Send revision request');
+  const limitHit = left === 0;
+  return el('div', { class: 'review', style: 'margin-top:8px' },
+    el('div', { class: 'small' }, el('b', {}, `${fname} says ${m.label} is ready.`), ' Check the files against what was agreed:'),
+    el('ul', { class: 'small' }, (m.criteria || []).map((c) => el('li', {}, c))),
+    m.deliverables.length ? m.deliverables.map(fileRow) : el('p', { class: 'muted small' }, 'No files found for this delivery.'),
+    !prop ? el('p', { class: 'muted small' }, 'Waiting for the payment request to be prepared. This page updates by itself.') : null,
+    el('div', { class: 'col-btns' },
+      el('button', { class: 'primary', disabled: C.busy || !prop, onclick: () => act(async () => {
+        const r = await api(`/api/proposals/${prop.id}/approve`, { body: { party: 'client' } });
+        C.release = r; C.msg = null;
+      }) }, C.busy ? 'Working…' : `Approve & pay ${money(m.amount_minor, m.currency || cur)}`),
+      el('button', { disabled: C.busy || limitHit, onclick: () => { C.revOpen = !C.revOpen; redrawClient(); } }, 'Request revision'),
+      el('button', { class: 'ghost', disabled: C.busy || !prop, onclick: () => showModal(el('h3', {}, `Cancel ${m.label} and release the hold?`),
+        el('p', { class: 'small' }, 'You are not charged. PayPal releases the hold and the work stops here.'),
+        el('div', { class: 'row' }, el('button', { class: 'primary', onclick: () => { closeModal(); act(async () => {
+          await api(`/api/proposals/${prop.id}/cancel`, { body: { party: 'client' } });
+          C.msg = el('div', { class: 'okbox' }, 'Cancelled. You were not charged and the PayPal hold is released.');
+        }); } }, 'Yes, cancel and release'), el('button', { onclick: closeModal }, 'Keep it'))) }, 'Cancel & release hold')),
+    limitHit ? el('p', { class: 'small muted' }, 'No revision rounds left. You can approve or cancel.') : el('p', { class: 'small muted' }, left != null ? `${left} revision round${left === 1 ? '' : 's'} left.` : 'Revision rounds: no limit set.'),
+    C.revOpen && !limitHit ? el('div', { class: 'revform' }, noteIn, el('div', { class: 'row', style: 'margin-top:6px' }, sendBtn, el('button', { class: 'ghost', onclick: () => { C.revOpen = false; redrawClient(); } }, 'Close'))) : null,
+    errSlot);
 }
 
 async function mountPayPal({ m, slot, err }) {

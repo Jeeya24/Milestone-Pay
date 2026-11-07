@@ -4,7 +4,7 @@
   --note:#2a5bd7; --note-bg:#eef2fd; --ok:#2f7d4f; --ok-bg:#e8f3ec; --bad:#b3401f; --bad-bg:#fbece7;
   --warn:#8a6100; --warn-bg:#fbf3dc; --pp:#ffc439;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif;}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.45 var(--sans)}
 button{font:inherit;cursor:pointer;border:1.5px solid var(--ink);background:var(--card);color:var(--ink);border-radius:6px;padding:6px 12px}
@@ -53,7 +53,7 @@ label.tog{white-space:nowrap;display:flex;align-items:center;gap:6px;font-size:1
 .empty{border:1.5px dashed var(--line);border-radius:8px;padding:28px;text-align:center;color:var(--ink3)}
 .empty b{display:block;color:var(--ink2);margin-bottom:6px}
 /* chat */
-.chat{display:flex;flex-direction:column;gap:6px;max-height:430px;overflow:auto;padding:4px}
+.chat{display:flex;flex-direction:column;gap:6px;max-height:min(520px,70vh);overflow-y:auto;padding:4px 4px 10px}
 .msg{max-width:88%;border:1.5px solid var(--line);border-radius:10px;padding:6px 9px;font-size:13px;background:var(--card);transition:background .2s}
 .msg.me{align-self:flex-end;background:var(--fill)}
 .msg .meta{font:10px var(--mono);color:var(--ink3);display:block}
@@ -119,7 +119,7 @@ header a{color:var(--ink);font-size:13px}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes sp{to{transform:rotate(360deg)}}
 .pill.refunded,.pill.revision_requested{background:var(--bad-bg);border-color:#efc3b5;color:var(--bad)}
-.msg{word-break:break-word}
+.msg{word-break:break-word;flex:none;overflow-wrap:anywhere}
 .linkbox{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .linkbox input{flex:1 1 220px;border-style:solid}
 .amt{width:100px;padding:3px 6px}
@@ -130,8 +130,19 @@ header a{color:var(--ink);font-size:13px}
 .testlogin code{flex:1;overflow:hidden;text-overflow:ellipsis}
 .pp-wrap{margin-top:8px;min-height:50px}
 @media (max-width:720px){
+  header{position:static}
   .col2,.grid3{grid-template-columns:1fr}
   .wrap{padding:12px 16px 50px}
   button{padding:10px 14px}
   .grid3 .stat b{font-size:18px}
 }
+
+.notes{border:1.5px solid var(--note);background:var(--note-bg);border-radius:8px;padding:8px 10px;margin:10px 0;font-size:12px}
+.notes .note{margin-top:3px}
+.col-btns{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.col-btns button{width:100%}
+.trace{margin:6px 0;padding-left:0;list-style:none;font-size:13px}
+.ms.cur{border-color:var(--ink)}
+.frow a{font-size:12px;white-space:nowrap}
+.review{border-top:1px dashed var(--line);padding-top:6px}
+progress{height:10px}
