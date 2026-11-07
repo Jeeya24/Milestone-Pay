@@ -107,7 +107,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 
 ### Step 4: Approve agreement
 - `POST /api/agreements/:id/approve` `{ party, content_hash? }`
-  - `party:"freelancer"` freezes the body (milestone amounts included). It computes `content_hash = "sha256:" + hex(sha256(canonicalJSON({ body without translations, milestones:[{label,title,amount_minor,criteria,rev_limit}] })))` and sets `status:"sent"`. It returns `200 { agreement, client_url:"/?as=client&p=<project_id>" }`.
+  - `party:"freelancer"` returns `409 AMOUNT_MISMATCH` ("The parts add up to $X but the agreed total is $Y. Fix the amounts first.") when the milestone amounts don't sum to `body.total_minor`, or any milestone is < 100 cents. Otherwise it freezes the body (milestone amounts included). It computes `content_hash = "sha256:" + hex(sha256(canonicalJSON({ body without translations, milestones:[{label,title,amount_minor,criteria,rev_limit}] })))` and sets `status:"sent"`. It returns `200 { agreement, client_url:"/?as=client&p=<project_id>" }`.
   - `party:"client"` must send a `content_hash` equal to the stored one, else `409 HASH_MISMATCH`. Before the freelancer approves it returns `409 NOT_SENT`. On success: `status:"approved"`, every milestone goes `draft → agreed`, and the response is `200 { agreement, milestones }`. No charge.
   - Both approvals are stored in the `approvals` collection `{ agreement_id, party, content_hash, at }`. Unknown `party` → `400 BAD_PARTY`.
 
