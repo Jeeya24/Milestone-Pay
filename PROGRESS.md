@@ -11,13 +11,13 @@
 - [ ] S1 PayPal spike: code reviewed (4b1af86); OAuth + order create verified live; authorize/capture/void needs a human buyer approval (headless login is blocked by PayPal's bot check). Card path refused: PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING
 - [x] S2 Extractor + vision + 3-chat eval on Gemini 3.1 Flash-Lite: 25/25 PASS live, $0.0069 at paid rates (9dea971)
 - [ ] **Gate 1** reported
-- [ ] S3-api agreement endpoints · [ ] S3-ui dash/paste/review/client approve
-- [ ] S4 Fund (+ PayPal button UI)
-- [ ] S5-api submit/review · [ ] S5-ui submit/review screens
-- [ ] S6 Agent (gated tools, fallback, guardrail)
-- [ ] S7-ai classifier · [ ] S7-api change requests · [ ] S7-ui scope screens
+- [x] S3-api agreement endpoints · [x] S3-ui dash/paste/review/client approve
+- [x] S4 Fund (+ PayPal button UI)
+- [x] S5-api submit/review · [x] S5-ui submit/review screens
+- [x] S6 Agent (gated tools, fallback, guardrail)
+- [x] S7-ai classifier · [x] S7-api change requests · [x] S7-ui scope screens
 - [ ] **Gate 2**: one milestone Agreed → Authorized → Submitted → Paid in the browser (capture id: _tbd_)
-- [ ] S8 seed + README · [ ] Judge mode + project page · [ ] e2e.js + bug bash
+- [x] S8 seed + README · [x] Judge mode + project page · [x] e2e.js + bug bash
 
 ## Journey steps (browser, Judge mode and ?as=client)
 - [ ] 1 Dashboard
@@ -40,6 +40,10 @@
 - [ ] Agent fallback works when the model call is forced to fail
 - [ ] ai_runs shows model, tokens, cost per call; one full demo < $0.05
 - [ ] No secrets in git history; .env.example present; README has run steps and sandbox logins
+
+## Status 2026-11-08
+All slices built and committed on branch `build/full-app`. `npm test` 110/110, `node scripts/e2e.js` 85/85 (PayPal stubbed), browser bug bash clean after fixes (reports/final.md).
+**Still needs a human:** one real sandbox run through the PayPal popup (authorize → submit → approve & pay → capture id; cancel → void) and a look at the ids in the sandbox dashboard. Gate 2 and the "ledger ids match PayPal" DoD item stay open until then.
 
 ## Notes
 - API currency: **USD** (owner decision 2026-11-07). `API_CURRENCY` env overrides. Demo fixture and eval priced in USD.
