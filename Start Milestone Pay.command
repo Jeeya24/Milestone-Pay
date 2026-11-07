@@ -20,6 +20,11 @@ if [ ! -d node_modules/@paypal/agent-toolkit ] || [ ! -d node_modules/express ];
   npm ci || npm install || { read -r -p "Install failed. Press Enter to close."; exit 1; }
 fi
 
+if [ ! -f db.json ] && [ -z "$DB_PATH" ]; then
+  echo "First launch: setting up the demo project…"
+  node seed.js || { read -r -p "Setup failed. Press Enter to close."; exit 1; }
+fi
+
 PORT_NUM=$(grep -E '^PORT=' .env | cut -d= -f2)
 PORT_NUM=${PORT_NUM:-3000}
 

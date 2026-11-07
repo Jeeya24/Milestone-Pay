@@ -1,5 +1,7 @@
 // PayPal sandbox smoke: order->authorize->capture, order->authorize->void, capture->refund.
 // Usage: node scripts/smoke.js   (USD by default; API_CURRENCY=THB to override)
+//        node scripts/smoke.js --fund   (against a running server at BASE_URL, default http://localhost:3000:
+//        funds the current milestone of the newest non-lab project; a human approves the PayPal popup URL)
 // Prints ids only; never prints credentials or auth headers.
 import 'dotenv/config';
 import crypto from 'node:crypto';
@@ -53,7 +55,37 @@ async function waitApproved(orderId) {
   }
 }
 
+async function fund() {
+  const base = (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
+  const api = async (method, url, body) => {
+    const res = await fetch(base + url, {
+      method, headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(`${method} ${url} -> ${res.status} ${j?.error || ''} ${j?.message || ''}`);
+    return j;
+  };
+  const { projects } = await api('GET', '/api/projects'); // newest first, lab projects hidden
+  if (!projects.length) throw new Error('no projects found; run npm run seed first');
+  const view = await api('GET', `/api/projects/${projects[0].id}`);
+  const m = view.milestones.find((x) => x.fundable);
+  if (!m) throw new Error(`project ${view.project.id} has no fundable milestone right now`);
+  log(`project ${view.project.id}: funding ${m.label} "${m.title}" (${m.amount_minor} minor units)`);
+  const { order_id: orderId } = await api('POST', `/api/milestones/${m.id}/order`);
+  log(`ORDER ${orderId}`);
+  log(`APPROVE (open in a normal browser, log in as the sandbox buyer): https://www.sandbox.paypal.com/checkoutnow?token=${orderId}`);
+  log('Waiting for approval (polls every 5s, up to 10 min)...');
+  await waitApproved(orderId);
+  const auth = await api('POST', `/api/milestones/${m.id}/authorize`, { order_id: orderId });
+  log('authorization_id', auth.payment.authorization_id, 'status', auth.payment.status);
+  const after = await api('GET', `/api/projects/${view.project.id}`);
+  log('ledger row', JSON.stringify(after.ledger.filter((l) => l.milestone_id === m.id).pop()));
+  log('FUND PASS');
+}
+
 async function main() {
+  if (process.argv.includes('--fund')) return fund();
   const cur = currency();
   log(`currency=${cur}`);
   const m1 = { id: rid(), title: 'Smoke capture', amount_minor: 15000 };
