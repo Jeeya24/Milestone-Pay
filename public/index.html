@@ -12,9 +12,23 @@
   <span class="logo">Milestone Pay<small>sandbox</small></span>
   <span class="side" id="side">Freelancer</span>
   <span class="spacer"></span>
+  <label class="tog" id="judgeLabel"><input type="checkbox" id="judgeTog" style="width:auto"> Judge mode (both sides)</label>
   <a href="#/" id="homeLink">All projects</a>
 </header>
-<main id="app"><div class="loading"><span class="spin"></span>Loading…</div></main>
+<div id="stage">
+  <section id="deskPane">
+    <div class="frame-label deskLabel">Freelancer · desktop</div>
+    <main id="app"><div class="loading"><span class="spin"></span>Loading…</div></main>
+  </section>
+  <aside id="phonePane" aria-label="Client phone view">
+    <div class="frame-label phoneLabel">Client · phone (link, no signup)</div>
+    <div class="phone"><div class="notch"></div>
+      <iframe id="phoneFrame" title="Client phone view" hidden></iframe>
+      <div id="phoneEmpty" class="empty">Open a project to see what the client sees, live.</div>
+    </div>
+  </aside>
+</div>
+<footer>Sandbox · fake money · PayPal holds the funds, not us</footer>
 <div id="toast"></div>
 <div id="modal"><div class="m" id="modalBody"></div></div>
 <script src="app.js"></script>

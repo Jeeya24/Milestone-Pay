@@ -3,6 +3,8 @@ const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
 const IS_CLIENT = params.get('as') === 'client';
 const CLIENT_PID = params.get('p');
+const IS_EMBED = params.get('embed') === '1';
+let JUDGE = params.get('judge') === '1' && !IS_CLIENT;
 let CFG = null;
 
 function el(tag, attrs = {}, ...kids) {
@@ -65,20 +67,30 @@ const fmtSize = (n) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n >= 1
 const ACCEPT = /\.(pdf|png|jpe?g|zip|mp4)$/i;
 const MAX_BYTES = 20 * 1024 * 1024;
 const viewUrl = (u) => u + (u.includes('?') ? '&' : '?') + 'inline=1';
-const sigOf = (d) => JSON.stringify([d.project?.status, d.agreement?.status, (d.milestones || []).map((m) => [m.id, m.status, m.rev_count, m.rev_note, m.payment?.status, m.fundable, m.proposal?.id, m.proposal?.status, (m.deliverables || []).map((f) => f.id)]), (d.notifications || []).length]);
+const sigOf = (d) => JSON.stringify([d.project?.status, d.agreement?.status,
+  (d.milestones || []).map((m) => [m.id, m.status, m.rev_count, m.rev_note, m.payment?.status, m.fundable, m.proposal?.id, m.proposal?.status, (m.deliverables || []).map((f) => f.id)]),
+  (d.notifications || []).length, (d.change_requests || []).map((c) => [c.id, c.status, c.classification]),
+  (d.ledger || []).length, (d.activity || []).length, (d.agent_runs || []).length]);
 
-// Poll the project every 3 s while the tab is visible and something is pending. Redraws only when data changed.
+// Poll the project while the tab is visible (every 3 s; every 2 s in Judge mode and in the embedded phone, which never stops).
+// Redraws only when data changed, and never while someone is typing in a field.
 let pollTimer = null;
+const typing = () => { const a = document.activeElement; return !!a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button'].includes(a.type))) && $('#app').contains(a); };
 function startPoll(pid, shouldPoll, getSig, setData, redraw, isBusy) {
   stopPoll();
+  const live = JUDGE || IS_EMBED;
   pollTimer = setInterval(async () => {
     if (document.hidden || isBusy()) return;
     try {
       const d = await api(`/api/projects/${pid}`);
-      if (isBusy() || !shouldPoll(d)) { if (!shouldPoll(d)) { const changed = sigOf(d) !== getSig(); setData(d); if (changed) redraw(); stopPoll(); } return; }
-      if (sigOf(d) !== getSig()) { setData(d); redraw(); }
+      if (isBusy()) return;
+      const keep = live || shouldPoll(d);
+      const changed = sigOf(d) !== getSig();
+      if (changed && typing()) return;
+      if (changed) { setData(d); redraw(); }
+      if (!keep) stopPoll();
     } catch { /* keep the screen as is; try again next tick */ }
-  }, 3000);
+  }, live ? 2000 : 3000);
 }
 function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }
 function keepFocus(fn) {
@@ -91,8 +103,10 @@ function keepFocus(fn) {
 function route() {
   closeModal(); stopPoll();
   const h = location.hash.replace(/^#/, '') || '/';
-  if (h === '/new') return viewNew();
-  const m = /^\/p\/([\w-]+)/.exec(h);
+  if (h === '/new') { syncPhone(null); return viewNew(); }
+  const m = /^\/p\/([\w-]+)(?:\/(scope))?/.exec(h);
+  syncPhone(m ? m[1] : null);
+  if (m && m[2] === 'scope') return viewScope(m[1]);
   if (m) return viewReview(m[1]);
   return viewDash();
 }
@@ -119,8 +133,10 @@ async function viewDash() {
           el('span', { class: 'muted small' }, ` · ${p.client || 'client'} · ${money(p.total_minor || 0, cur)}`), el('br'),
           (p.milestones || []).map((m) => [el('span', { class: `pill ${m.status}` }, `${m.label} ${pillText(m.status)}`), ' ']),
           p.open_change_request && p.open_change_request.from === 'client' && p.open_change_request.status === 'open'
-            ? el('span', { class: 'pill authorized' }, `● ${p.client || 'Client'} requested a change`) : null),
-        el('button', { onclick: () => go(`/p/${p.id}`) }, 'Open')))
+            ? el('button', { class: 'badge-btn', onclick: () => go(`/p/${p.id}/scope`) }, `● ${p.client || 'Client'} requested a change`) : null),
+        el('div', { class: 'row' },
+          ['draft', 'sent'].includes(p.status) ? null : el('a', { class: 'small', href: `?judge=1&p=${encodeURIComponent(p.id)}#/p/${p.id}` }, 'Open in Judge mode'),
+          el('button', { onclick: () => go(`/p/${p.id}`) }, 'Open'))))
     : el('div', { class: 'empty' }, el('b', {}, 'No projects yet'), 'Paste a LINE or WhatsApp chat to turn it into an agreement.', el('br'), el('br'),
         el('button', { class: 'primary', onclick: () => go('/new') }, 'Paste a chat'), ' ', demoBtn);
   mount(el('div', { class: 'wrap' },
@@ -214,10 +230,10 @@ function viewNew() {
 const R = { data: null, hl: null, tr: false, showAgreement: false, pid: null };
 async function viewReview(pid) {
   mount(el('div', { class: 'wrap' }, loadingBox('Loading the agreement…')));
-  try { R.data = await api(`/api/projects/${pid}`); R.hl = null; R.tr = false; R.showAgreement = false; R.pid = pid; Pj.picked = []; Pj.err = null; Pj.msg = null; Pj.upPct = null; Pj.busy = false; }
+  try { R.data = await api(`/api/projects/${pid}`); R.hl = null; R.tr = false; R.showAgreement = false; R.pid = pid; Pj.picked = []; Pj.err = null; Pj.msg = null; Pj.upPct = null; Pj.busy = false; Pj.rf = null; Pj.gd = null; }
   catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: () => viewReview(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
   renderFreelancer();
-  if (['sent', 'active'].includes(R.data.project?.status)) startPoll(pid, (d) => d.project?.status === 'sent' || d.project?.status === 'active', () => sigOf(R.data), (d) => { R.data = d; }, () => keepFocus(renderFreelancer), () => Pj.busy);
+  if (JUDGE || ['sent', 'active'].includes(R.data.project?.status)) startPoll(pid, (d) => d.project?.status === 'sent' || d.project?.status === 'active', () => sigOf(R.data), (d) => { R.data = d; }, () => keepFocus(renderFreelancer), () => Pj.busy);
 }
 function renderFreelancer() {
   const a = R.data.agreement;
@@ -345,7 +361,7 @@ function drawReview(err) {
 }
 
 // ---------------------------------------------------------------- freelancer project page (vSubmit + project)
-const Pj = { picked: [], err: null, upPct: null, busy: false, msg: null };
+const Pj = { picked: [], err: null, upPct: null, busy: false, msg: null, rf: null, gd: null };
 
 function notesBox(d, to) {
   const list = (d.notifications || []).filter((n) => n.to === to).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 3);
@@ -468,7 +484,291 @@ function drawProject() {
       el('div', { class: 'linkbox' }, el('input', { readonly: true, value: clientUrl, 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
         el('button', { onclick: () => copyText(clientUrl, 'Client link') }, 'Copy link'),
         el('a', { href: clientUrl, target: '_blank', rel: 'noopener' }, el('button', {}, 'Open client view')),
-        el('button', { class: 'ghost', onclick: () => { R.showAgreement = true; renderFreelancer(); } }, 'View agreement')))));
+        el('button', { class: 'ghost', onclick: () => { R.showAgreement = true; renderFreelancer(); } }, 'View agreement'))),
+    changeCard(d),
+    timelineCard(milestones),
+    ledgerCard(d, cur, el('button', { class: 'small ghost', disabled: Pj.rf?.busy, onclick: doRefresh }, Pj.rf?.busy ? 'Checking PayPal…' : 'Refresh from PayPal')),
+    refreshBox(),
+    deliverablesCard(milestones),
+    activityCard(d),
+    runsCard(d),
+    guardrailCard(d)));
+}
+
+// ---------------------------------------------------------------- project page sections (vProject)
+const LEDGER_TEXT = { AUTHORIZED: 'Client payment held by PayPal', CAPTURED: 'Paid out to the freelancer', VOIDED: 'Hold released, nothing charged', REFUNDED: 'Refunded to the client' };
+const EVENT_TEXT = { 'milestone.submitted': 'Work was submitted', 'proposal.approved': 'Client approved the payment', 'proposal.voided': 'Client cancelled and released the hold' };
+const STEP_TEXT = { get_order: 'Checked the order with PayPal', propose_release: 'Asked the client to approve the payment', capture_authorization: 'Captured the held payment',
+  void_authorization: 'Released the PayPal hold', notify: 'Told both sides' };
+const WHO = { ai: ['AI', 'AI'], pp: ['PP', 'PayPal'], agent: ['AG', 'Agent'], client: ['CL', 'Client'], free: ['FR', 'Freelancer'], sys: ['SY', 'System'] };
+const fmtDateTime = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const usd = (v) => `$${Number(v || 0).toFixed(4)}`;
+
+function timelineCard(milestones) {
+  if (!milestones.length) return el('div', { class: 'card' }, el('h4', {}, 'Timeline'), el('p', { class: 'muted small' }, 'No milestones yet.'));
+  let prevEnd = 0;
+  const rows = milestones.map((m) => {
+    const start = m.start_day ?? prevEnd; const end = Math.max(m.end_day ?? start + 3, start + 1); prevEnd = end;
+    return { m, start, end };
+  });
+  const span = Math.max(1, ...rows.map((r) => r.end));
+  const bars = rows.map(({ m, start, end }) => {
+    const blocked = ['draft', 'agreed'].includes(m.status) && !m.fundable;
+    const cls = blocked ? 'blocked' : m.status;
+    const tip = blocked ? `${m.label}: locked until the earlier parts are paid` : `${m.label}: ${pillText(m.status)}`;
+    return el('div', { class: 'r' }, el('span', { title: m.title }, `${m.label} ${m.title}`),
+      el('div', { class: 'track' }, el('div', { class: `b ${cls}`, style: `left:${(start / span) * 100}%;width:${Math.max(2, ((end - start) / span) * 100)}%`, title: tip, role: 'img', 'aria-label': tip })));
+  });
+  return el('div', { class: 'card' }, el('h4', {}, 'Timeline'),
+    el('div', { class: 'tl' }, el('div', { class: 'axis' }, el('span', {}, 'Day 0'), el('span', {}, `Day ${Math.round(span / 2)}`), el('span', {}, `Day ${span}`)), bars),
+    el('p', { class: 'small muted', style: 'margin:6px 0 0' }, 'Hatched bars are locked: they start only after the part before them is paid.'));
+}
+
+function ledgerCard(d, cur, extra) {
+  const rows = [...(d.ledger || [])].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const latest = new Map(); rows.forEach((l) => latest.set(l.milestone_id, l));
+  let held = 0; latest.forEach((l) => { if (l.event === 'AUTHORIZED') held += l.amount_minor; });
+  const paid = rows.reduce((a, l) => a + (l.event === 'CAPTURED' ? l.amount_minor : l.event === 'REFUNDED' ? -l.amount_minor : 0), 0);
+  return el('div', { class: 'card' },
+    el('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:6px' }, el('h4', { style: 'margin:0' }, 'Payment ledger'), extra || null),
+    rows.length
+      ? el('div', { class: 'tablewrap' }, el('table', {}, el('thead', {}, el('tr', {}, el('th', {}, 'Time'), el('th', {}, 'Part'), el('th', {}, 'What happened'), el('th', {}, 'PayPal id'), el('th', { class: 'num' }, 'Amount'))),
+        el('tbody', {}, rows.map((l) => el('tr', {}, el('td', {}, fmtDateTime(l.at)), el('td', {}, l.label || ''), el('td', {}, LEDGER_TEXT[l.event] || l.event),
+          el('td', { class: 'mono', title: l.paypal_id || '' }, l.paypal_id ? (l.paypal_id.length > 14 ? l.paypal_id.slice(0, 14) + '…' : l.paypal_id) : ''), el('td', { class: 'num' }, money(l.amount_minor, cur)))))))
+      : el('p', { class: 'muted small' }, 'No PayPal activity yet. Rows appear when a part is funded, paid or cancelled.'),
+    el('div', { class: 'row small', style: 'margin-top:8px;gap:16px' }, el('span', {}, 'Held by PayPal now: ', el('b', {}, money(held, cur))), el('span', {}, 'Paid out: ', el('b', {}, money(paid, cur)))));
+}
+
+function deliverablesCard(milestones) {
+  const withFiles = milestones.filter((m) => (m.deliverables || []).length || m.versions);
+  return el('div', { class: 'card' }, el('h4', {}, 'Deliverables'),
+    withFiles.length ? withFiles.map((m) => el('div', { style: 'margin-bottom:8px' },
+      el('b', { class: 'small' }, `${m.label} ${m.title}`), ' ', pill(m.status), ' ',
+      el('span', { class: 'muted small' }, `version ${m.rev_count + 1}${m.versions > 1 ? ` · ${m.versions} versions kept` : ''}`),
+      (m.deliverables || []).length ? m.deliverables.map(fileRow) : el('p', { class: 'muted small', style: 'margin:2px 0' }, 'Waiting for new files.')))
+      : el('p', { class: 'muted small' }, 'No files submitted yet.'));
+}
+
+function activityCard(d) {
+  const rows = [...(d.activity || [])].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 40);
+  return el('div', { class: 'card' }, el('h4', {}, 'Activity'),
+    rows.length ? el('div', { class: 'feed' }, rows.map((a) => { const w = WHO[a.who] || WHO.sys;
+      return el('div', { class: 'item' }, el('span', { class: `who who-${a.who}`, title: w[1] }, w[0]), el('span', { class: 'txt' }, a.text), el('span', { class: 'when muted' }, fmtDateTime(a.at))); }))
+      : el('p', { class: 'muted small' }, 'Nothing has happened yet.'));
+}
+
+function runsCard(d) {
+  const runs = [...(d.agent_runs || [])].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 8);
+  const ms = new Map((d.milestones || []).map((m) => [m.id, m]));
+  return el('div', { class: 'card' }, el('h4', {}, 'Milestone Agent runs'),
+    runs.length ? runs.map((r) => el('div', { class: 'run' },
+      el('div', { class: 'row small', style: 'gap:6px' }, el('b', {}, `${ms.get(r.milestone_id)?.label || ''} ${EVENT_TEXT[r.event] || r.event}`.trim()),
+        el('span', { class: 'badge', title: r.mode === 'fallback' ? 'The AI model was too slow or failed, so fixed rules ran instead' : 'The AI model chose the steps' }, r.mode === 'fallback' ? 'fallback rules' : 'AI model'),
+        el('span', { class: 'muted' }, fmtDateTime(r.at))),
+      el('ol', { class: 'trace' }, (r.steps || []).map((s) => el('li', {}, s.ok === false ? '✗ ' : '✓ ', STEP_TEXT[s.tool] || 'Ran a step', s.ok === false && s.result?.error ? el('span', { class: 'muted' }, ` (${s.result.error})`) : null)))))
+      : el('p', { class: 'muted small' }, 'The agent has not run yet. It runs when work is submitted or the client decides.'),
+    el('p', { class: 'small muted', style: 'margin:6px 0 0' }, 'AI cost so far: ', el('b', {}, usd(d.ai_cost?.cost_usd)), ` over ${d.ai_cost?.calls ?? 0} AI call${d.ai_cost?.calls === 1 ? '' : 's'}.`));
+}
+
+async function doRefresh() {
+  Pj.rf = { busy: true }; drawProject();
+  try {
+    const r = await api(`/api/projects/${R.pid}/refresh`, { body: {} });
+    Pj.rf = { rows: r.payments || [] };
+    try { R.data = await api(`/api/projects/${R.pid}`); } catch { /* keep the old data */ }
+  } catch (e) { Pj.rf = { err: e }; }
+  drawProject();
+}
+async function doGuardrail(m) {
+  Pj.gd = { busy: true }; drawProject();
+  try { Pj.gd = { res: await api('/api/agent/guardrail-test', { body: { milestone_id: m.id } }) }; }
+  catch (e) { Pj.gd = { err: e }; }
+  drawProject();
+}
+function refreshBox() {
+  const r = Pj.rf; if (!r || r.busy) return null;
+  if (r.err) return errBox(r.err);
+  const lines = r.rows.map((p) => {
+    const label = (R.data.milestones || []).find((m) => m.id === p.milestone_id)?.label || '';
+    return el('div', {}, `${label} PayPal says: order ${p.order_status || 'unknown'}, hold ${p.authorization_status || 'none'}, payment ${p.capture_status || 'none'}.`);
+  });
+  return el('div', { class: 'okbox small' }, el('b', {}, 'Checked with PayPal. '), lines.length ? lines : 'No PayPal payments to check yet.');
+}
+function guardrailCard(d) {
+  const ms = d.milestones || []; const m = ms.find((x) => x.is_current) || ms[ms.length - 1];
+  const g = Pj.gd; let out = null;
+  if (g?.err) out = errBox(g.err);
+  else if (g?.res) {
+    const blocked = g.res.result?.error === 'NO_APPROVAL';
+    out = el('div', { class: blocked ? 'okbox' : 'err', role: 'status' },
+      blocked ? el('b', {}, "Blocked: NO_APPROVAL — the agent cannot move money without the client's approval.")
+        : el('b', {}, `Unexpected result: ${g.res.result?.error || 'not blocked'}`),
+      g.res.proposal_id ? el('div', { class: 'small' }, 'Forged proposal id used: ', el('span', { class: 'hash' }, g.res.proposal_id)) : null,
+      g.res.trace ? el('pre', { class: 'tracebox' }, String(g.res.trace)) : null,
+      el('div', { class: 'small muted' }, 'PayPal was not called.'));
+  }
+  return el('div', { class: 'card' }, el('h4', {}, 'Safety check'),
+    el('p', { class: 'small', style: 'margin:0 0 6px' }, 'Try to make the agent capture money with a made-up approval. The code must refuse.'),
+    el('button', { disabled: !m || g?.busy, onclick: () => doGuardrail(m) }, g?.busy ? 'Testing…' : 'Test the guardrail'), out ? el('div', { style: 'margin-top:6px' }, out) : null);
+}
+
+function changeCard(d) {
+  const open = (d.change_requests || []).find((c) => c.status === 'open' || c.status === 'sent');
+  const clientName = d.project.client || 'The client';
+  let body;
+  if (!open) body = el('p', { class: 'muted small', style: 'margin:0' }, 'No open change request. Raise one if the scope needs to change, or when the client sends you one on chat.');
+  else if (open.status === 'sent') body = el('p', { class: 'small', style: 'margin:0' }, `Quote sent: ${open.sent_version?.title || 'new work'}. Waiting for ${clientName} to accept or decline.`);
+  else body = el('p', { class: 'small', style: 'margin:0' }, open.from === 'client' ? el('b', {}, `${clientName} requested a change. `) : 'You opened a change request. ', 'Review it and decide.');
+  return el('div', { class: 'card', style: open?.status === 'open' && open.from === 'client' ? 'border-color:var(--warn)' : null },
+    el('div', { class: 'row', style: 'justify-content:space-between' }, el('h4', { style: 'margin:0' }, 'Change requests'),
+      el('button', { class: open?.status === 'open' ? 'primary small' : 'small', onclick: () => go(`/p/${d.project.id}/scope`) }, open ? 'Review request' : 'Raise a change request')),
+    el('div', { style: 'margin-top:6px' }, body));
+}
+
+// ---------------------------------------------------------------- scope screen (vScope, freelancer)
+const Sc = { id: null, title: '', items: [], price: '', q: null, err: null, busy: false, text: '', creating: false, createErr: null, chain: Promise.resolve() };
+const VERDICT = {
+  new_work: { cls: 'fail', label: 'NEW WORK', note: 'Not covered by the agreement. You can quote it as a new part.' },
+  in_scope: { cls: 'pass', label: 'ALREADY IN SCOPE', note: 'Already covered by what was agreed. No new price is needed.' },
+  revision: { cls: 'human', label: 'REVISION', note: 'Looks like a revision of existing work, which the agreement already covers.' },
+};
+async function viewScope(pid) {
+  mount(el('div', { class: 'wrap' }, loadingBox('Loading change requests…')));
+  try { R.data = await api(`/api/projects/${pid}`); R.pid = pid; }
+  catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: () => viewScope(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
+  Sc.err = null; Sc.createErr = null; Sc.q = null; Sc.busy = false; Sc.creating = false;
+  drawScope();
+  startPoll(pid, () => true, () => sigOf(R.data), (x) => { R.data = x; }, () => keepFocus(drawScope), () => Sc.busy || Sc.creating);
+}
+function initDraft(c) {
+  if (Sc.id === c.id) return;
+  const dr = c.draft || {};
+  Sc.id = c.id; Sc.title = dr.title || ''; Sc.items = [...(dr.deliverables || [])]; Sc.price = major(dr.amount_minor || 0); Sc.err = null; Sc.q = null;
+}
+function drawScope() {
+  const d = R.data; const { project } = d;
+  const cur = d.agreement?.body?.currency || CFG?.currency || 'USD';
+  const crs = d.change_requests || [];
+  const open = crs.find((c) => c.status === 'open' || c.status === 'sent');
+  const past = crs.filter((c) => c !== open).reverse();
+  const wrap = el('div', { class: 'wrap' },
+    el('button', { class: 'ghost small', onclick: () => go(`/p/${project.id}`) }, '← Back to project'),
+    el('h2', { style: 'margin-top:8px' }, 'Change requests'),
+    el('p', { class: 'muted' }, `${project.client || 'The client'} can ask for changes from their phone, or you can paste one they sent you on chat. The AI compares it with the agreement. You make the final call.`));
+  if (!d.agreement || d.agreement.status !== 'approved') {
+    wrap.append(el('div', { class: 'empty' }, el('b', {}, 'Not open yet'), 'Change requests are possible once both sides approved the agreement.'));
+  } else if (open) wrap.append(crCard(open, d, cur));
+  else wrap.append(newRequestForm(project));
+  if (past.length) wrap.append(el('h4', { style: 'margin-top:14px' }, 'Earlier requests'), ...past.map((c) => el('div', { class: 'card small' },
+    el('div', { class: 'row', style: 'justify-content:space-between' }, el('b', {}, c.sent_version?.title || (c.text.length > 60 ? c.text.slice(0, 60) + '…' : c.text)),
+      el('span', { class: `pill ${c.status === 'accepted' ? 'paid' : c.status === 'declined' ? 'voided' : ''}` }, { accepted: 'Accepted', declined: 'Declined', closed: 'Closed' }[c.status] || c.status)),
+    el('div', { class: 'muted' }, `${c.from === 'client' ? 'From the client' : 'From you'} · ${fmtDate(c.created_at)}`))));
+  mount(wrap);
+}
+function newRequestForm(project) {
+  const errSlot = el('div');
+  const ta = el('textarea', { id: 'scopeIn', rows: 3, maxlength: 1000, placeholder: `Paste or describe the change${project.client ? ` ${project.client} asked for` : ''} (at least 5 characters)`, value: Sc.text, disabled: Sc.creating,
+    oninput: () => { Sc.text = ta.value; btn.disabled = Sc.creating || Sc.text.trim().length < 5; } });
+  const btn = el('button', { class: 'primary', disabled: Sc.creating || Sc.text.trim().length < 5, onclick: async () => {
+    Sc.creating = true; Sc.createErr = null; drawScope();
+    try { await api(`/api/projects/${project.id}/change-requests`, { body: { message: Sc.text.trim(), from: 'freelancer' } }); Sc.text = ''; Sc.id = null; R.data = await api(`/api/projects/${project.id}`); }
+    catch (e) { Sc.createErr = e; }
+    Sc.creating = false; drawScope();
+  } }, 'Check against agreement');
+  return el('div', { class: 'card' }, el('h4', {}, 'Raise a change request'),
+    el('div', { class: 'empty', style: 'padding:14px;margin-bottom:8px' }, 'No open change request.'),
+    ta, el('div', { class: 'row', style: 'margin-top:8px' }, btn, Sc.creating ? loadingBox('Checking against the agreement…') : null),
+    Sc.createErr ? errBox(Sc.createErr) : errSlot);
+}
+function crCard(c, d, cur) {
+  const clientName = d.project.client || 'The client';
+  const v = VERDICT[c.classification];
+  const msgs = d.messages || [];
+  const quoteSlot = el('div');
+  const showQuote = (id) => {
+    const m = msgs.find((x) => x.msg_id === id);
+    quoteSlot.replaceChildren(Sc.q === id ? '' : el('div', { class: 'msg', style: 'max-width:100%;margin-top:6px' }, el('span', { class: 'meta' }, m ? `${m.msg_id} · ${m.sender || ''}` : id), m ? m.text : 'This message is not in the chat.'));
+    Sc.q = Sc.q === id ? null : id;
+  };
+  const chips = (c.reason_source_ids || []).map((id) => el('button', { class: 'chip', type: 'button', onclick: () => showQuote(id), 'aria-label': `Show chat message ${id}` }, id));
+  const out = [
+    el('div', { class: 'card', style: 'border-color:var(--warn)' }, el('h4', {}, `From ${c.from === 'client' ? clientName : 'you'} · ${fmtDate(c.created_at)}`),
+      el('div', { class: 'msg', style: 'max-width:100%' }, c.text)),
+    el('div', { class: 'card' }, el('div', { class: 'row' }, v ? el('span', { class: `res ${v.cls}`, style: 'padding:2px 8px' }, v.label) : el('span', { class: 'res human', style: 'padding:2px 8px' }, 'UNKNOWN'),
+        el('span', { class: 'muted small' }, 'AI suggestion. You make the final call.')),
+      el('p', { style: 'margin-top:8px' }, c.reason || (v ? v.note : ''), ' ', chips), quoteSlot,
+      v && c.status === 'open' && c.classification !== 'new_work' ? el('p', { class: 'small muted' }, v.note) : null),
+  ];
+  if (c.status === 'sent') {
+    const sv = c.sent_version || {};
+    out.push(el('div', { class: 'card' }, el('h4', {}, 'Quote sent to the client'),
+      el('div', { class: 'ms' }, el('div', { class: 'top' }, el('b', {}, `${sv.label || ''} · ${sv.title || ''}`), el('span', {}, money(sv.amount_minor || 0, cur))),
+        el('ul', {}, (sv.deliverables || []).map((i) => el('li', {}, i)))),
+      el('p', { class: 'muted small' }, `Waiting for ${clientName} to accept or decline. This page updates by itself.`)));
+  } else if (c.classification === 'new_work' && c.draft) out.push(draftEditor(c, cur));
+  else {
+    const errSlot = el('div');
+    const btn = el('button', { class: 'primary', onclick: async () => {
+      btn.disabled = true; btn.textContent = 'Closing…';
+      try { await api(`/api/change-requests/${c.id}/close`, { body: {} }); R.data = await api(`/api/projects/${d.project.id}`); drawScope(); }
+      catch (e) { btn.disabled = false; btn.textContent = 'Close request'; errSlot.replaceChildren(errBox(e)); }
+    } }, 'Close request');
+    out.push(el('div', { class: 'row' }, btn, el('span', { class: 'muted small' }, 'Nothing to price. Tell the client on chat, then close this.')), errSlot);
+  }
+  return el('div', {}, out);
+}
+function draftEditor(c, cur) {
+  initDraft(c);
+  const ai = c.ai_draft || {};
+  const errSlot = el('div'); const noteSlot = el('span', { class: 'muted small' });
+  const pillSlot = el('span'); const resetSlot = el('span'); const priceNote = el('p', { class: 'small muted', style: 'margin:6px 0 0' });
+  const sendBtn = el('button', { class: 'primary' });
+  const cleanItems = () => Sc.items.map((x) => x.trim()).filter(Boolean);
+  const edited = () => Sc.title.trim() !== (ai.title || '') || parseMinor(Sc.price) !== ai.amount_minor || JSON.stringify(cleanItems()) !== JSON.stringify(ai.deliverables || []);
+  const paint = () => {
+    const e = edited(); const p = parseMinor(Sc.price);
+    pillSlot.replaceChildren(e ? el('span', { class: 'pill' }, 'edited') : '');
+    resetSlot.replaceChildren(e ? el('button', { class: 'small ghost', type: 'button', onclick: reset }, 'Reset to AI draft') : '');
+    priceNote.replaceChildren(`AI price: ${money(ai.amount_minor || 0, cur)}${ai.price_basis ? ` (${ai.price_basis})` : ''}.`, p != null && p !== ai.amount_minor ? el('b', {}, ` You set ${money(p, cur)}.`) : '');
+    sendBtn.textContent = `Send ${money(p || 0, cur)} change order to client`;
+    sendBtn.disabled = Sc.busy || p == null;
+  };
+  const save = (body) => {
+    noteSlot.textContent = 'Saving…';
+    Sc.chain = Sc.chain.then(async () => {
+      try { const r = await api(`/api/change-requests/${c.id}`, { method: 'PATCH', body }); Object.assign(c, r.change_request); errSlot.replaceChildren(); noteSlot.textContent = 'Saved'; }
+      catch (e) { noteSlot.textContent = ''; errSlot.replaceChildren(errBox(e)); }
+    });
+    return Sc.chain;
+  };
+  async function reset() {
+    Sc.title = ai.title || ''; Sc.items = [...(ai.deliverables || [])]; Sc.price = major(ai.amount_minor || 0);
+    await save({ title: Sc.title, deliverables: Sc.items, amount_minor: ai.amount_minor }); drawScope();
+  }
+  const title = el('input', { id: 'crTitle', value: Sc.title, maxlength: 120, 'aria-label': 'Milestone title', style: 'width:min(280px,100%);padding:3px 6px;display:inline-block',
+    oninput: () => { Sc.title = title.value; paint(); }, onchange: () => save({ title: Sc.title.trim() }) });
+  const price = el('input', { id: 'crPrice', value: Sc.price, inputmode: 'decimal', 'aria-label': `Price in ${cur}`, class: 'amt',
+    oninput: () => { Sc.price = price.value; paint(); },
+    onchange: () => { const v = parseMinor(price.value); if (v == null) { toast('Enter a price like 200 or 200.50'); Sc.price = major(parseMinor(Sc.price) ?? ai.amount_minor ?? 0); price.value = Sc.price; paint(); return; } save({ amount_minor: v }); } });
+  const rows = Sc.items.map((it, i) => el('div', { class: 'row', style: 'gap:6px;margin-bottom:4px;flex-wrap:nowrap' },
+    el('input', { id: `crItem-${i}`, value: it, maxlength: 120, placeholder: 'Describe a deliverable', 'aria-label': `Deliverable ${i + 1}`, style: 'padding:4px 6px',
+      oninput: (e) => { Sc.items[i] = e.target.value; paint(); }, onchange: () => save({ deliverables: cleanItems() }) }),
+    el('button', { class: 'small ghost', type: 'button', 'aria-label': `Remove deliverable ${i + 1}`, onclick: async () => { Sc.items.splice(i, 1); await save({ deliverables: cleanItems() }); drawScope(); } }, '✕')));
+  sendBtn.addEventListener('click', async () => {
+    Sc.busy = true; sendBtn.disabled = true; errSlot.replaceChildren();
+    await Sc.chain;
+    try { const r = await api(`/api/change-requests/${c.id}/send`, { body: {} }); Object.assign(c, r.change_request); Sc.busy = false; toast('Change order sent to the client'); drawScope(); }
+    catch (e) { Sc.busy = false; paint(); errSlot.replaceChildren(errBox(e)); }
+  });
+  paint();
+  return el('div', { class: 'card' },
+    el('p', { class: 'small', style: 'margin:0 0 8px;color:var(--note)' }, "This is the AI's draft. Change anything it got wrong before you send it. ", pillSlot),
+    el('div', { class: 'ms' },
+      el('div', { class: 'top' }, el('b', { style: 'flex:1;min-width:0' }, `${ai.label || 'New'} · `, title), el('span', { style: 'white-space:nowrap' }, price, ` ${cur}`)),
+      priceNote,
+      el('h4', { style: 'margin:10px 0 4px' }, 'Deliverables'), rows,
+      el('div', { class: 'row', style: 'margin-top:6px' }, el('button', { class: 'small', type: 'button', onclick: () => { Sc.items.push(''); drawScope(); const n = document.getElementById(`crItem-${Sc.items.length - 1}`); if (n) n.focus(); } }, '+ Add deliverable'), resetSlot, noteSlot)),
+    el('div', { class: 'row' }, sendBtn, el('span', { class: 'muted small' }, 'The client sees exactly what is above.')), errSlot);
 }
 
 // ---------------------------------------------------------------- client view (vClient)
@@ -495,9 +795,9 @@ async function viewClient() {
   catch (e) { return mount(el('div', { class: 'wrap narrow' }, errBox(e), el('button', { onclick: viewClient }, 'Try again'))); }
   C.msg = null; C.err = null;
   drawClient(d);
-  startPoll(CLIENT_PID, (x) => ['sent', 'active'].includes(x.project?.status), () => sigOf(C.d), (x) => { C.d = x; }, redrawClient, () => C.busy);
+  startPoll(CLIENT_PID, (x) => ['sent', 'active'].includes(x.project?.status), () => sigOf(C.d), (x) => { C.d = x; }, redrawClient, () => C.busy || C.crBusy);
 }
-const C = { d: null, msg: null, err: null, errFor: null, busy: false, revOpen: false, note: '', release: null };
+const C = { d: null, msg: null, err: null, errFor: null, busy: false, revOpen: false, note: '', release: null, crText: '', crOpen: false, crBusy: false, crErr: null };
 function redrawClient() { keepFocus(() => drawClient(C.d)); }
 function drawClient(d, msg) {
   C.d = d; if (msg) C.msg = msg;
@@ -536,9 +836,11 @@ function drawClient(d, msg) {
   if (C.release) wrap.append(releaseTrace(C.release, cur));
   if (C.msg) wrap.append(C.msg);
   const notes = notesBox(d, 'client'); if (notes) wrap.append(notes);
-  wrap.append(el('h4', { style: 'margin-top:12px' }, 'Payments'));
   const buttons = [];
   const fname = b.freelancer_name || project.freelancer_name || 'the freelancer';
+  const quote = (d.change_requests || []).find((c) => c.status === 'sent' && c.sent_version);
+  if (quote) wrap.append(quoteCard(quote, cur, fname));
+  wrap.append(el('h4', { style: 'margin-top:12px' }, 'Payments'));
   milestones.forEach((m) => {
     const card = el('div', { class: 'ms small' });
     card.append(el('div', { class: 'top' }, el('b', {}, `${m.label} ${m.title}`), pill(m.status)));
@@ -568,9 +870,69 @@ function drawClient(d, msg) {
     }
     wrap.append(card);
   });
+  wrap.append(changeForm(d, fname));
+  wrap.append(el('details', { class: 'card', style: 'margin-top:12px' }, el('summary', { style: 'cursor:pointer;font-weight:600' }, 'Project details'),
+    el('div', { style: 'margin-top:8px' }, timelineCard(milestones), ledgerCard(d, cur))));
   wrap.append(el('p', { style: 'text-align:center' }, el('button', { class: 'ghost small', onclick: viewClient }, 'Refresh')));
   mount(wrap);
   buttons.forEach((x) => mountPayPal(x, d));
+}
+
+// ---- client: scope creep (request a change, accept or decline a quote)
+async function crAct(fn) {
+  C.busy = true; C.err = null; redrawClient();
+  try { await fn(); } catch (e) { C.err = e.message + (e.code && e.code !== 'NETWORK' ? ` (${e.code})` : ''); C.errFor = 'cr'; }
+  C.busy = false;
+  try { C.d = await api(`/api/projects/${CLIENT_PID}`); } catch { /* keep the old data */ }
+  redrawClient();
+}
+function quoteCard(c, cur, fname) {
+  const sv = c.sent_version;
+  return el('div', { class: 'card small', style: 'border-color:var(--warn)' },
+    el('b', {}, c.from === 'client' ? `${fname}'s price for your request` : 'New work proposed'), el('br'),
+    `${sv.label ? sv.label + ' ' : ''}${sv.title} · ${money(sv.amount_minor, cur)}`, el('br'),
+    el('span', { class: 'muted' }, "This wasn't in the original agreement. You'd get:"),
+    el('ul', { style: 'padding-left:16px;margin:4px 0' }, (sv.deliverables || []).map((i) => el('li', {}, i))),
+    el('div', { class: 'row', style: 'margin-top:6px' },
+      el('button', { class: 'primary small', disabled: C.busy, onclick: () => crAct(async () => {
+        const r = await api(`/api/change-requests/${c.id}/decide`, { body: { accept: true } });
+        C.msg = el('div', { class: 'okbox' }, `Accepted. ${r.milestone ? r.milestone.label + ' ' + r.milestone.title : 'The new part'} was added to your payments. You can pay for it once the earlier parts are paid.`);
+      }) }, C.busy ? 'Working…' : 'Accept'),
+      el('button', { class: 'small', disabled: C.busy, onclick: () => crAct(async () => {
+        await api(`/api/change-requests/${c.id}/decide`, { body: { accept: false } });
+        C.msg = el('div', { class: 'okbox' }, 'Declined. The agreement stays as it was.');
+      }) }, 'Decline')),
+    C.err && C.errFor === 'cr' ? errBox({ message: C.err }) : null);
+}
+function changeForm(d, fname) {
+  const crs = d.change_requests || [];
+  const open = crs.find((c) => c.status === 'open');
+  const sent = crs.find((c) => c.status === 'sent');
+  const last = [...crs].reverse().find((c) => c.from === 'client');
+  const head = el('h4', { style: 'margin-top:12px' }, 'Need something else?');
+  if (sent) return el('div', {}, head, el('p', { class: 'small muted' }, 'Answer the price above first. You can send another request after that.'));
+  if (open) return el('div', {}, head, el('div', { class: 'card small' }, el('b', {}, open.from === 'client' ? `Request sent to ${fname}` : `${fname} opened a change request`),
+    open.from === 'client' ? el('div', { class: 'msg', style: 'max-width:100%;margin:6px 0' }, open.text) : null,
+    el('span', { class: 'muted' }, `Waiting for ${fname} to answer. This page updates by itself.`)));
+  const done = last && ['closed', 'declined'].includes(last.status) ? el('p', { class: 'small muted' }, last.status === 'closed'
+    ? `${fname} reviewed your last request and closed it. It was already covered by the agreement, or can be handled as a revision.` : 'You declined the last price. The agreement is unchanged.') : null;
+  if (C.crBusy) return el('div', {}, head, loadingBox('Checking against the agreement…'));
+  if (!C.crOpen) return el('div', {}, head, done, el('button', { style: 'width:100%', onclick: () => { C.crOpen = true; redrawClient(); } }, 'Request a change'));
+  const ta = el('textarea', { id: 'crText', rows: 4, maxlength: 1000, placeholder: 'What would you like to add or change? (at least 5 characters)', value: C.crText,
+    oninput: (e) => { C.crText = e.target.value; send.disabled = C.crText.trim().length < 5; } });
+  const send = el('button', { class: 'primary', disabled: C.crText.trim().length < 5, onclick: async () => {
+    C.crBusy = true; C.crErr = null; redrawClient();
+    try {
+      await api(`/api/projects/${CLIENT_PID}/change-requests`, { body: { message: C.crText.trim(), from: 'client' } });
+      C.crText = ''; C.crOpen = false; C.msg = el('div', { class: 'okbox' }, `Request sent to ${fname}. They will check it and reply with a price if it is new work.`);
+    } catch (e) { C.crErr = e.message + (e.code && e.code !== 'NETWORK' ? ` (${e.code})` : ''); }
+    C.crBusy = false;
+    try { C.d = await api(`/api/projects/${CLIENT_PID}`); } catch { /* keep the old data */ }
+    redrawClient();
+  } }, 'Send request');
+  return el('div', {}, head, el('div', { class: 'revform', style: 'border-color:var(--ink)' }, ta,
+    el('div', { class: 'row', style: 'margin-top:6px' }, send, el('button', { class: 'ghost', onclick: () => { C.crOpen = false; C.crErr = null; redrawClient(); } }, 'Cancel')),
+    C.crErr ? errBox({ message: C.crErr }) : null));
 }
 
 const TOOL_TEXT = {
@@ -650,11 +1012,33 @@ async function mountPayPal({ m, slot, err }) {
   } catch { /* 403 or not available: hide */ }
 }
 
+// ---------------------------------------------------------------- Judge mode (freelancer desktop + client phone, both live)
+let phonePid = null;
+function syncPhone(pid) {
+  if (!JUDGE) return;
+  const f = $('#phoneFrame');
+  $('#phoneEmpty').hidden = !!pid; f.hidden = !pid;
+  if (!pid) { phonePid = null; f.removeAttribute('src'); return; }
+  if (pid !== phonePid) { phonePid = pid; f.src = `?as=client&p=${encodeURIComponent(pid)}&embed=1`; }
+}
+function setJudge(on) {
+  JUDGE = on; document.body.classList.toggle('judge', on); $('#judgeTog').checked = on;
+  const u = new URL(location.href);
+  if (on) u.searchParams.set('judge', '1'); else { u.searchParams.delete('judge'); u.searchParams.delete('p'); }
+  history.replaceState(null, '', u);
+  if (!on) { phonePid = null; $('#phoneFrame').removeAttribute('src'); }
+  route();
+}
+
 // ---------------------------------------------------------------- boot
 (async function boot() {
+  if (IS_EMBED) document.body.classList.add('embed');
   try { CFG = await api('/api/config'); } catch (e) { /* PayPal button will show its own error */ }
-  if (IS_CLIENT) return viewClient();
+  if (IS_CLIENT) { $('#judgeLabel').hidden = true; return viewClient(); }
   $('#side').textContent = 'Freelancer';
+  $('#judgeTog').addEventListener('change', (e) => setJudge(e.target.checked));
+  document.body.classList.toggle('judge', JUDGE); $('#judgeTog').checked = JUDGE;
   window.addEventListener('hashchange', route);
-  route();
+  if (JUDGE && params.get('p') && !location.hash.replace(/^#/, '')) location.hash = `#/p/${params.get('p')}`;
+  else route();
 })();
