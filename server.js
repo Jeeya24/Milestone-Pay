@@ -11,7 +11,7 @@ import { createRoutes } from './routes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, fixturesDir } = {}) {
+export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, agentOpts, fixturesDir } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -38,7 +38,7 @@ export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent,
   });
 
   app.use('/api/lab', labRouter());
-  app.use('/api', createRoutes({ paypal, ai, agent, ...(fixturesDir ? { fixturesDir } : {}) }));
+  app.use('/api', createRoutes({ paypal, ai, agent, ...(agentOpts ? { agentOpts } : {}), ...(fixturesDir ? { fixturesDir } : {}) }));
 
   app.use(express.static(path.join(HERE, 'public')));
 

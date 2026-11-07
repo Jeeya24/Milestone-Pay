@@ -217,12 +217,15 @@ function projectView(p) {
   };
 }
 
+const VOIDABLE_STATES = ['authorized', 'submitted', 'revision_requested'];
+const lastPaymentOf = (mid) => [...D().payments].reverse().find((p) => p.milestone_id === mid) ?? null;
 const money = (minor, cur) => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(minor / 100);
 
 // ---------------------------------------------------------------------------
 
-export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXTURES_DIR || FIXTURES }) {
+export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = process.env.FIXTURES_DIR || FIXTURES }) {
   const r = express.Router();
+  const runAgent = (event, id, extra = {}) => agent.runAgent(event, id, { paypal, ...agentOpts, ...extra });
 
   /** Run a PayPal call; any failure becomes 502 PAYPAL_ERROR with the debug id. */
   async function pp(fn) {
@@ -237,6 +240,16 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
 
   // De-duplicate concurrent double clicks: callers with the same key share one in-flight promise.
   const inflight = new Map();
+  // Serialize work per key (a milestone's money moves never overlap).
+  const chains = new Map();
+  const serial = (key, fn) => {
+    const prev = chains.get(key) || Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    const tail = next.catch(() => {});
+    chains.set(key, tail);
+    tail.then(() => { if (chains.get(key) === tail) chains.delete(key); });
+    return next;
+  };
   const once = (key, fn) => {
     if (inflight.has(key)) return inflight.get(key);
     const p = Promise.resolve().then(fn).finally(() => inflight.delete(key));
@@ -318,7 +331,7 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
     res.json({
       projects: projects.map((p) => {
         const ms = milestonesOf(p.id);
-        const cr = d.change_requests.find((c) => c.project_id === p.id && c.status === 'open');
+        const cr = d.change_requests.find((c) => c.project_id === p.id && (c.status === 'open' || c.status === 'sent'));
         const v = projectView(p);
         return {
           id: p.id, title: v.title, freelancer: v.freelancer, client: v.client,
@@ -469,6 +482,14 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
     const project = d.projects.find((p) => p.id === a.project_id);
     if (party === 'freelancer') {
       if (a.status === 'draft') {
+        const sum = ms.reduce((t, m) => t + m.amount_minor, 0);
+        const total = a.body.total_minor;
+        if (sum !== total) {
+          throw E('AMOUNT_MISMATCH', `The parts add up to ${money(sum, a.body.currency)} but the agreed total is ${money(total, a.body.currency)}. Fix the amounts first.`, 409);
+        }
+        if (ms.some((m) => !(m.amount_minor >= 100))) {
+          throw E('AMOUNT_MISMATCH', `Every part must be at least ${money(100, a.body.currency)}. Fix the amounts first.`, 409);
+        }
         a.content_hash = agreementHash(a, ms);
         a.status = 'sent';
         d.approvals.push({ agreement_id: a.id, party: 'freelancer', content_hash: a.content_hash, at: now() });
@@ -620,7 +641,12 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
       db.transition(m, 'submitted');
       db.activity(m.project_id, 'free', `${m.label} submitted for review (version ${version})`);
       db.notify(m.project_id, 'client', `${m.label} was delivered. Review the files and approve to pay ${money(m.amount_minor, m.currency)}.`);
-      const agent_run = await agent.runAgent('milestone.submitted', m.id);
+      // The milestone is already `submitted`; an agent failure must never turn that into a 500.
+      let agent_run = null;
+      try { agent_run = await runAgent('milestone.submitted', m.id); } catch (err) {
+        console.error('agent failed after submit:', err?.message);
+        try { agent_run = await runAgent('milestone.submitted', m.id, { forceFallback: true }); } catch (e2) { console.error('agent fallback failed:', e2?.message); }
+      }
       const proposal = [...D().proposals].reverse().find((p) => p.milestone_id === m.id && p.action === 'release' && p.status === 'pending') ?? null;
       return { milestone: milestoneView(m), proposal: proposalView(proposal), agent_run };
     });
@@ -669,6 +695,288 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
     res.json({ milestone: milestoneView(m) });
   });
 
+  // ---- Step 7 (cont.): proposals, agent ------------------------------------
+  const getProposal = (id) => {
+    const p = D().proposals.find((x) => x.id === id);
+    if (!p) throw E('NOT_FOUND', 'Proposal not found', 404);
+    return p;
+  };
+  const runById = (id) => D().agent_runs.find((x) => x.id === id) ?? null;
+  const nextView = (m) => {
+    const n = db.currentMilestone(m.project_id);
+    return n ? { milestone_id: n.id, label: n.label, title: n.title, amount_minor: n.amount_minor } : null;
+  };
+  const lastPayment = (m) => [...D().payments].reverse().find((p) => p.milestone_id === m.id) ?? null;
+  /** A money step failed in the agent run: surface it as PAYPAL_ERROR (nothing changed) with the debug id. */
+  function moneyFailure(run, tool) {
+    const s = [...(run?.steps || [])].reverse().find((x) => x.tool === tool && !x.ok);
+    const e = E('PAYPAL_ERROR', 'PayPal could not complete this step. Nothing was changed; please try again.', 502);
+    e.paypal_debug_id = s?.result?.paypal_debug_id ?? null;
+    return e;
+  }
+
+  r.post('/proposals/:id/approve', async (req, res) => {
+    const prop = getProposal(req.params.id);
+    if (req.body?.party !== 'client') throw E('BAD_PARTY', 'Only the client can approve a release.');
+    const m = getMilestone(prop.milestone_id);
+    // One lock per milestone for approve and cancel: a double click or a racing cancel cannot capture twice.
+    const out = await once(`approve:${m.id}`, () => serial(`money:${m.id}`, async () => {
+      if (prop.action !== 'release') throw E('PROPOSAL_NOT_PENDING', 'This proposal is not a release proposal.', 409);
+      if (prop.status === 'pending') {
+        if (m.status !== 'submitted') throw E('PROPOSAL_NOT_PENDING', 'This milestone is not waiting for review.', 409);
+        prop.status = 'approved';
+        prop.approved_by = 'client';
+        db.save();
+        db.activity(m.project_id, 'client', `${m.label}: client approved the work and the release of ${money(m.amount_minor, m.currency)}`);
+      } else if (prop.status === 'approved' && m.status === 'submitted') {
+        // an earlier attempt failed at PayPal: retry (same PayPal-Request-Id, so PayPal cannot double capture)
+      } else if (prop.status === 'executed' || prop.status === 'approved') {
+        // already done: return the first result
+      } else {
+        throw E('PROPOSAL_NOT_PENDING', 'This proposal is no longer pending.', 409);
+      }
+      let run = runById(prop.run_id);
+      if (m.status === 'submitted') {
+        run = await runAgent('proposal.approved', m.id);
+        prop.run_id = run.id;
+        db.save();
+        if (m.status !== 'paid') throw moneyFailure(run, 'capture_authorization');
+      }
+      const pay = lastPayment(m);
+      return {
+        proposal: proposalView(prop), milestone: milestoneView(m),
+        payment: { capture_id: pay?.capture_id ?? null, status: pay?.status ?? null },
+        agent_run: run, next: nextView(m),
+      };
+    }));
+    res.json(out);
+  });
+
+  r.post('/proposals/:id/cancel', async (req, res) => {
+    const prop = getProposal(req.params.id);
+    if (req.body?.party !== 'client') throw E('BAD_PARTY', 'Only the client can cancel a milestone.');
+    const m = getMilestone(prop.milestone_id);
+    const out = await once(`cancel:${m.id}`, () => serial(`money:${m.id}`, async () => {
+      const d = D();
+      const existingVoid = d.proposals.find((p) => p.milestone_id === m.id && p.action === 'void' && ['approved', 'executed'].includes(p.status));
+      if (m.status === 'voided' && existingVoid) {
+        return { milestone: milestoneView(m), payment: { status: 'VOIDED' }, agent_run: runById(existingVoid.run_id) };
+      }
+      if (prop.action !== 'release' || !['pending', 'withdrawn'].includes(prop.status)) {
+        throw E('PROPOSAL_NOT_PENDING', 'This proposal cannot be cancelled.', 409);
+      }
+      db.transition({ ...m }, 'voided'); // throws ILLEGAL_TRANSITION unless authorized/submitted/revision_requested
+      for (const p of d.proposals) if (p.milestone_id === m.id && p.action === 'release' && p.status === 'pending') p.status = 'withdrawn';
+      let vp = existingVoid;
+      if (!vp) {
+        vp = {
+          id: db.id('prop'), project_id: m.project_id, milestone_id: m.id, action: 'void', status: 'approved',
+          reason: 'Client cancelled the milestone', approved_by: 'client', created_at: now(),
+        };
+        d.proposals.push(vp);
+      }
+      db.save();
+      db.activity(m.project_id, 'client', `${m.label}: client cancelled the milestone and asked for the hold to be released`);
+      const run = await runAgent('proposal.voided', m.id);
+      vp.run_id = run.id;
+      db.save();
+      if (m.status !== 'voided') throw moneyFailure(run, 'void_authorization');
+      return { milestone: milestoneView(m), payment: { status: 'VOIDED' }, agent_run: run };
+    }));
+    res.json(out);
+  });
+
+  r.post('/agent/run', async (req, res) => {
+    const { event, milestone_id } = req.body || {};
+    if (!['milestone.submitted', 'proposal.approved', 'proposal.voided'].includes(event)) throw E('BAD_EVENT', 'Unknown agent event.');
+    const m = getMilestone(String(milestone_id ?? ''));
+    const agent_run = await serial(`money:${m.id}`, () => runAgent(event, m.id, req.body?.forceFallback === true ? { forceFallback: true } : {}));
+    res.json({ agent_run });
+  });
+
+  r.post('/agent/guardrail-test', async (req, res) => {
+    const m = getMilestone(String(req.body?.milestone_id ?? ''));
+    res.json(await agent.guardrailTest(m.id, { paypal }));
+  });
+
+  // ---- Step 8: scope creep -------------------------------------------------
+  const getCr = (id) => {
+    const c = D().change_requests.find((x) => x.id === id);
+    if (!c) throw E('NOT_FOUND', 'Change request not found', 404);
+    return c;
+  };
+  const crOpen = (c) => c.status === 'open' || c.status === 'sent';
+  const trim120 = (s) => String(s ?? '').trim().slice(0, 120);
+
+  /** The classifier sees the FROZEN agreement and milestones only, never the chat. */
+  function agreementSummary(p) {
+    const a = agreementOf(p.id);
+    const ms = milestonesOf(p.id);
+    return {
+      title: a.body.title, currency: a.body.currency, total_minor: ms.reduce((s, m) => s + m.amount_minor, 0),
+      terms: a.body.terms.map((t) => ({ key: t.key, value: t.value ?? null, source_message_ids: t.source_message_ids || [] })),
+      milestones: ms.map((m) => ({ label: m.label, title: m.title, amount_minor: m.amount_minor, criteria: m.criteria, status: m.status })),
+      rev_limit: ms.find((m) => m.rev_limit != null)?.rev_limit ?? null,
+    };
+  }
+
+  r.post('/projects/:id/change-requests', async (req, res) => {
+    const p = getProject(req.params.id);
+    const from = req.body?.from;
+    if (from !== 'client' && from !== 'freelancer') throw E('BAD_PARTY', 'from must be "client" or "freelancer".');
+    const text = (typeof req.body?.message === 'string' ? req.body.message : '').trim().slice(0, 1000);
+    if (text.length < 5) throw E('MESSAGE_TOO_SHORT', 'Describe the change in at least 5 characters.');
+    const cr = await once(`cr:${p.id}`, async () => {
+      if (agreementOf(p.id)?.status !== 'approved') throw E('AGREEMENT_NOT_APPROVED', 'Change requests are only possible after both sides approved the agreement.', 409);
+      if (D().change_requests.some((c) => c.project_id === p.id && crOpen(c))) {
+        throw E('OPEN_REQUEST_EXISTS', 'Finish or close the open change request first.', 409);
+      }
+      let out;
+      try { out = await ai.classifyChange(agreementSummary(p), text); } catch (err) {
+        if (err?.code === 'BUDGET_EXCEEDED') throw err;
+        console.error('classify failed:', err?.message);
+        throw E('AI_FAILED', 'The AI could not assess this request. Please try again.', 502);
+      }
+      const row = {
+        id: db.id('cr'), project_id: p.id, from, text, status: 'open',
+        classification: out.classification, reason: out.reason, reason_source_ids: out.reason_source_ids || [],
+        ai_draft: out.ai_draft ?? null, draft: out.ai_draft ? structuredClone(out.ai_draft) : null,
+        sent_version: null, milestone_id: null, created_at: now(),
+      };
+      D().change_requests.push(row);
+      db.save();
+      db.activity(p.id, 'ai', `Change request from the ${from} assessed as ${out.classification.replace('_', ' ')}`);
+      if (from === 'client') db.notify(p.id, 'freelancer', 'The client sent a change request. Review it and, if it is new work, send a quote.');
+      else db.notify(p.id, 'client', 'The freelancer opened a change request on this project.');
+      return row;
+    });
+    res.status(201).json({ change_request: cr });
+  });
+
+  r.patch('/change-requests/:id', (req, res) => {
+    const c = getCr(req.params.id);
+    if (c.status !== 'open') throw E('FROZEN', 'This request was already sent or closed.', 409);
+    if (!c.draft) throw E('NOT_NEW_WORK', 'Only new work has a price to edit.', 409);
+    const b = req.body || {};
+    if (b.title !== undefined) c.draft.title = trim120(b.title);
+    if (b.deliverables !== undefined) {
+      if (!Array.isArray(b.deliverables)) throw E('BAD_DELIVERABLES', 'deliverables must be a list of strings.');
+      c.draft.deliverables = b.deliverables.filter((x) => typeof x === 'string').map(trim120).filter(Boolean).slice(0, 20);
+    }
+    if (b.amount_minor !== undefined) {
+      if (!Number.isSafeInteger(b.amount_minor) || b.amount_minor < 0) throw E('BAD_AMOUNT', 'amount_minor must be a non-negative integer (cents).');
+      c.draft.amount_minor = b.amount_minor;
+    }
+    db.save();
+    res.json({ change_request: c });
+  });
+
+  r.post('/change-requests/:id/send', (req, res) => {
+    const c = getCr(req.params.id);
+    if (c.status === 'sent') return res.json({ change_request: c }); // repeat call
+    if (c.status !== 'open') throw E('FROZEN', 'This request was already decided or closed.', 409);
+    if (c.classification !== 'new_work' || !c.draft) throw E('NOT_NEW_WORK', 'Only new work can be quoted. Close this request instead.', 409);
+    if (!c.draft.title?.trim()) throw E('TITLE_REQUIRED', 'Give the new milestone a title.');
+    if (!c.draft.deliverables?.length) throw E('DELIVERABLE_REQUIRED', 'List at least one deliverable.');
+    if (!(c.draft.amount_minor >= 100)) throw E('BAD_AMOUNT', 'The price must be at least 1.00.');
+    c.sent_version = structuredClone(c.draft);
+    c.status = 'sent';
+    db.save();
+    db.activity(c.project_id, 'free', `Quote sent: ${c.sent_version.title} for ${money(c.sent_version.amount_minor, agreementOf(c.project_id).body.currency)}`);
+    db.notify(c.project_id, 'client', `A quote for new work is waiting for you: ${c.sent_version.title}, ${money(c.sent_version.amount_minor, agreementOf(c.project_id).body.currency)}.`);
+    res.json({ change_request: c });
+  });
+
+  r.post('/change-requests/:id/close', (req, res) => {
+    const c = getCr(req.params.id);
+    if (c.status === 'closed') return res.json({ change_request: c });
+    if (!crOpen(c)) throw E('FROZEN', 'This request was already decided.', 409);
+    c.status = 'closed';
+    db.save();
+    db.activity(c.project_id, 'sys', 'Change request closed');
+    res.json({ change_request: c });
+  });
+
+  r.post('/change-requests/:id/decide', async (req, res) => {
+    const c = getCr(req.params.id);
+    if (typeof req.body?.accept !== 'boolean') throw E('BAD_REQUEST', 'accept must be true or false.');
+    const accept = req.body.accept;
+    const out = await once(`cr-decide:${c.id}`, async () => {
+      const want = accept ? 'accepted' : 'declined';
+      if (c.status === want) { // repeat call
+        return { change_request: c, milestone: c.milestone_id ? milestoneView(getMilestone(c.milestone_id)) : null };
+      }
+      if (c.status !== 'sent' || !c.sent_version) throw E('NOT_SENT', 'The freelancer has not sent a quote for this request.', 409);
+      let milestone = null;
+      if (accept) {
+        const ms = milestonesOf(c.project_id);
+        const last = ms[ms.length - 1];
+        const n = ms.reduce((mx, m) => Math.max(mx, parseInt(String(m.label).replace(/\D/g, ''), 10) || 0), 0);
+        const sv = c.sent_version;
+        const row = {
+          id: db.id('ms'), project_id: c.project_id, agreement_id: last.agreement_id, label: `M${n + 1}`, seq: last.seq + 1,
+          title: sv.title, amount_minor: sv.amount_minor, currency: last.currency, status: 'agreed',
+          criteria: [...sv.deliverables], rev_count: 0, rev_limit: last.rev_limit ?? null, rev_note: null,
+          start_day: last.end_day ?? 0, end_day: (last.end_day ?? 0) + 3, change_request_id: c.id,
+        };
+        D().milestones.push(row);
+        c.milestone_id = row.id;
+        milestone = row;
+      }
+      c.status = want;
+      db.save();
+      const cur = agreementOf(c.project_id).body.currency;
+      db.activity(c.project_id, 'client', accept
+        ? `Client accepted the quote: ${milestone.label} ${milestone.title} (${money(milestone.amount_minor, cur)}) added`
+        : 'Client declined the quote');
+      db.notify(c.project_id, 'freelancer', accept
+        ? `The client accepted your quote. ${milestone.label} ${milestone.title} is added and waits for funding.`
+        : 'The client declined your quote. The agreement is unchanged.');
+      return { change_request: c, milestone: milestone ? milestoneView(milestone) : null };
+    });
+    res.json(out);
+  });
+
+  // ---- Step 9: refresh from PayPal -----------------------------------------
+  r.post('/projects/:id/refresh', async (req, res) => {
+    const p = getProject(req.params.id);
+    const payments = [];
+    for (const pay of D().payments.filter((x) => x.project_id === p.id && x.order_id)) {
+      const m = D().milestones.find((x) => x.id === pay.milestone_id);
+      if (!m) continue;
+      const o = await pp(() => paypal.getOrder(pay.order_id));
+      const pu = o?.purchase_units?.[0]?.payments;
+      const auth = pu?.authorizations?.[0];
+      const cap = pu?.captures?.[0];
+      payments.push({ milestone_id: m.id, order_status: o?.status ?? null, authorization_status: auth?.status ?? null, capture_status: cap?.status ?? null });
+      if (lastPaymentOf(m.id)?.id !== pay.id) continue; // only the latest attempt drives the milestone
+      try {
+        if (cap?.status === 'COMPLETED' && m.status === 'submitted') {
+          db.transition(m, 'paid');
+          Object.assign(pay, { capture_id: cap.id, status: 'CAPTURED', authorization_id: pay.authorization_id || auth?.id || null });
+          db.save();
+          db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'CAPTURED', paypal_id: cap.id, amount_minor: m.amount_minor });
+          db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the funds were captured (refresh)`);
+        } else if (!cap && ['VOIDED', 'EXPIRED'].includes(auth?.status) && VOIDABLE_STATES.includes(m.status)) {
+          db.transition(m, 'voided');
+          pay.status = 'VOIDED';
+          db.save();
+          db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'VOIDED', paypal_id: auth.id, amount_minor: m.amount_minor });
+          db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the authorization is ${auth.status.toLowerCase()} (refresh)`);
+        } else if (pay.status === 'CREATED' && auth?.id && ['CREATED', 'PENDING'].includes(auth.status) && m.status === 'agreed') {
+          db.transition(m, 'authorized');
+          Object.assign(pay, { status: 'AUTHORIZED', authorization_id: auth.id, expires_at: auth.expiration_time || null });
+          db.save();
+          db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'AUTHORIZED', paypal_id: auth.id, amount_minor: m.amount_minor });
+          db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the funds are held (refresh)`);
+        }
+      } catch (err) {
+        if (!(err instanceof db.AppError)) throw err; // an illegal move means the db already differs on purpose; leave it
+      }
+    }
+    res.json({ payments });
+  });
+
   // ---- Step 9: project page ------------------------------------------------
   r.get('/projects/:id', (req, res) => {
     const p = getProject(req.params.id);
@@ -676,7 +984,7 @@ export function createRoutes({ paypal, ai, agent, fixturesDir = process.env.FIXT
     const a = agreementOf(p.id);
     const mine = (rows) => rows.filter((x) => x.project_id === p.id);
     res.json({
-      project: projectView(p),
+      project: { ...projectView(p), open_change_request: (() => { const c = d.change_requests.find((x) => x.project_id === p.id && (x.status === 'open' || x.status === 'sent')); return c ? { id: c.id, from: c.from, status: c.status } : null; })() },
       agreement: agreementView(a),
       approvals: a ? d.approvals.filter((x) => x.agreement_id === a.id) : [],
       messages: projectMessages(p.id),

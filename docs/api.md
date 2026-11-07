@@ -168,6 +168,15 @@ Every other move throws. An accepted change order inserts a new milestone direct
 - `GET /api/ai-runs?date=YYYY-MM-DD` → `200 { runs:[ { at, task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback } ], total_cost_usd }`
 - `db.js` exports `logAiRun(row)` and `todayCostUsd()`. The budget guard throws `BUDGET_EXCEEDED` (HTTP 429) when `todayCostUsd() >= 1`.
 
+## Extra error codes (added during build)
+`400 BAD_PARTY` (party not allowed for that action), `400 BAD_EVENT` (agent/run), `400 BAD_AMOUNT` (PATCH milestone / change request, send), `400 BAD_DELIVERABLES`, `400 BAD_REQUEST` (`accept` not boolean), `409 NOT_NEW_WORK` (PATCH/send on a non-new-work request), `409 NOT_CURRENT` (submit/revision on a non-current milestone), `422 EXTRACT_INCOMPLETE`, `422 CURRENCY_MISMATCH`, `409 AMOUNT_MISMATCH`.
+
+## Agent notes (S6 as built)
+- The model gets one response (`MAX_STEPS = 1` in agent.js) and emits all tool calls at once, executed in order; code completes any skipped notify/money step. Multi-step fails on `@ai-sdk/google@1` ("Function call is missing a thought_signature").
+- Agent run rows also carry `model, input_tokens, output_tokens, cost_usd, summary, fallback_reason`.
+- `get_order` uses `paypal.getOrder` (REST, same auth as the toolkit).
+- Notifications are fixed templates chosen by name (`paid_freelancer`, `fund_next_client`, `voided_both`, `review_client`, `problem_freelancer`) and refused unless the state matches.
+
 ## Internal module interfaces
 
 ```js

@@ -133,8 +133,9 @@ test('submit moves to submitted, runs the agent once, creates exactly one pendin
   assert.equal(r.body.proposal.reason, 'Work submitted for M1; client to review');
   assert.equal(r.body.agent_run.event, 'milestone.submitted');
   assert.equal(r.body.agent_run.mode, 'fallback');
-  assert.deepEqual(r.body.agent_run.steps[0], { tool: 'propose_release', args: { milestone_id: m1 }, result: { proposal_id: r.body.proposal.id }, ok: true });
-  assert.deepEqual(agentCalls, [['milestone.submitted', m1]]);
+  assert.deepEqual(r.body.agent_run.steps.map((x) => x.tool), ['get_order', 'propose_release', 'notify']);
+  assert.deepEqual(r.body.agent_run.steps[1], { tool: 'propose_release', args: {}, result: { ok: true, proposal_id: r.body.proposal.id }, ok: true });
+  assert.deepEqual(agentCalls.map((c) => c.slice(0, 2)), [['milestone.submitted', m1]]);
   assert.equal(db.load().proposals.length, 1);
 
   const again = await app.call('POST', `/api/milestones/${m1}/submit`); // double click
@@ -270,6 +271,6 @@ test('the revision note never reaches agent.runAgent', async () => {
   await app.call('POST', `/api/milestones/${m1}/submit`);
   assert.equal(agentCalls.length, 2);
   assert.ok(!JSON.stringify(agentCalls).includes(secret));
-  assert.deepEqual(agentCalls.map((c) => c.length), [2, 2]);
+  assert.deepEqual(agentCalls.map((c) => Object.keys(c[2] || {}).sort()), [['forceFallback', 'paypal'], ['forceFallback', 'paypal']]);
   assert.ok(!JSON.stringify(db.load().agent_runs).includes(secret));
 });

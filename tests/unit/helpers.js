@@ -12,8 +12,9 @@ export function tmpEnv(prefix) {
   return dir;
 }
 
-export async function startApp(stubs) {
-  const app = createApp(stubs);
+export async function startApp(stubs = {}) {
+  // Default: never call a live model from a test. S6 tests pass their own agentOpts.
+  const app = createApp({ agentOpts: { forceFallback: true }, ...stubs });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (method, url, body, headers = {}) => {
@@ -71,7 +72,7 @@ export async function aiStub(overrides = {}) {
 }
 
 export function paypalStub(overrides = {}) {
-  const calls = { order: [], authorize: [] };
+  const calls = { order: [], authorize: [], capture: [], void: [], getOrder: [] };
   let n = 0;
   return {
     calls,
@@ -81,6 +82,13 @@ export function paypalStub(overrides = {}) {
       calls.authorize.push(orderId);
       return { authorization_id: `AUTH-${orderId}`, status: 'CREATED', expires_at: '2026-12-01T00:00:00Z' };
     },
+    captureAuth: async (authId) => { calls.capture.push(authId); await new Promise((r) => setTimeout(r, 20)); return { id: `CAP-${authId}`, status: 'COMPLETED' }; },
+    voidAuth: async (authId) => { calls.void.push(authId); return { status: 'VOIDED' }; },
+    getOrder: async (orderId) => {
+      calls.getOrder.push(orderId);
+      return { id: orderId, status: 'COMPLETED', purchase_units: [{ payments: { authorizations: [{ id: `AUTH-${orderId}`, status: 'CREATED', expiration_time: '2026-12-01T00:00:00Z' }] } }] };
+    },
+    total: () => calls.order.length + calls.authorize.length + calls.capture.length + calls.void.length + calls.getOrder.length,
     ...overrides,
   };
 }
