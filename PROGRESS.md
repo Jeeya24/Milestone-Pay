@@ -2,13 +2,13 @@
 
 ## Phase 0: plan
 - [x] `docs/api.md`, `PLAN.md`, `PROGRESS.md` written
-- [ ] `.env` present with PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GOOGLE_GENERATIVE_AI_API_KEY (no Anthropic key: Gemini only, 2026-11-06)
-- [ ] Custom agents loaded (backend-builder, ai-builder, frontend-builder, qa-tester on Sonnet)
+- [x] `.env` present with PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, GOOGLE_GENERATIVE_AI_API_KEY (no Anthropic key: Gemini only, 2026-11-06); sandbox OAuth verified 2026-11-07
+- [x] Custom agents loaded (backend-builder, ai-builder, frontend-builder, qa-tester on Sonnet)
 - [x] PLAN.md approved (2026-11-06, incl. P1–P3)
 
 ## Slices
 - [x] S0 Scaffold (backend): 2061cfb, review clean
-- [ ] S1 PayPal spike: code reviewed (4b1af86); live smoke.js waiting on sandbox buyer approval (THB accepted at order create)
+- [ ] S1 PayPal spike: code reviewed (4b1af86); OAuth + order create verified live; authorize/capture/void needs a human buyer approval (headless login is blocked by PayPal's bot check). Card path refused: PAYEE_NOT_ENABLED_FOR_CARD_PROCESSING
 - [x] S2 Extractor + vision + 3-chat eval on Gemini 3.1 Flash-Lite: 25/25 PASS live, $0.0069 at paid rates (9dea971)
 - [ ] **Gate 1** reported
 - [ ] S3-api agreement endpoints · [ ] S3-ui dash/paste/review/client approve
@@ -42,4 +42,6 @@
 - [ ] No secrets in git history; .env.example present; README has run steps and sandbox logins
 
 ## Notes
-- API currency: _tbd after S1_
+- API currency: **USD** (owner decision 2026-11-07). `API_CURRENCY` env overrides. Demo fixture and eval priced in USD.
+- 2026-11-07: dependencies were never installed (`npm ci` fixed the failing test). Test Lab (`/lab.html`, `/api/lab`) and `Start Milestone Pay.command` launcher added (86321a6).
+- 2026-11-07: owner asked for the full app per SPEC, built with the builder agents. Round 1 = S3-api+S4 (backend) ∥ S3-ui+fund UI (frontend).

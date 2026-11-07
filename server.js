@@ -4,10 +4,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
 import { labRouter } from './lab.js';
+import * as realPaypal from './paypal.js';
+import * as realAi from './ai.js';
+import { createRoutes } from './routes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp() {
+export function createApp({ paypal = realPaypal, ai = realAi } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -34,6 +37,7 @@ export function createApp() {
   });
 
   app.use('/api/lab', labRouter());
+  app.use('/api', createRoutes({ paypal, ai }));
 
   app.use(express.static(path.join(HERE, 'public')));
 
@@ -48,7 +52,11 @@ export function createApp() {
       ? err.code
       : status === 500 ? 'INTERNAL' : 'BAD_REQUEST';
     if (status === 500) console.error('server error:', err.message);
-    res.status(status).json({ error: code, message: status === 500 ? 'Internal error' : err.message });
+    res.status(status).json({
+      error: code,
+      message: status === 500 ? 'Internal error' : err.message,
+      ...(err.paypal_debug_id !== undefined ? { paypal_debug_id: err.paypal_debug_id } : {}),
+    });
   });
 
   return app;

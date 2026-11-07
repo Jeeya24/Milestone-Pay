@@ -70,6 +70,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 - `POST /api/demo` → `201 { project_id }`. Creates the Baan Kafe project from `fixtures/baan-kafe.txt` and runs extract. It uses a cached extraction from `fixtures/baan-kafe.extract.json` if that file exists, otherwise a live call.
 
 ### Step 1: Dashboard
+- Project `status` (computed, never stored): `draft` (no freelancer approval) · `sent` (freelancer approved, client not yet) · `active` · `completed` (every milestone paid/refunded) · `stopped` (current milestone voided). Test Lab projects are hidden.
 - `GET /api/projects` → `200 { projects:[ { id, title, freelancer, client, total_minor, status, milestones:[{id,label,status}], open_change_request:{ id, from, status }|null } ], totals:{ held_minor, paid_minor, not_funded_minor } }`
   - `held_minor` = the amount of every milestone whose latest ledger event is `AUTHORIZED`.
   - `paid_minor` = `CAPTURED` minus `REFUNDED`.
@@ -99,7 +100,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
     "translations":{ "en":{ "m1":"Hi Ploy! …" } }   // only for messages not already fully English
   } }
 ```
-  - Re-running extract replaces the draft. `409 AGREEMENT_FROZEN` once the freelancer has approved.
+  - Re-running extract replaces the draft. `409 AGREEMENT_FROZEN` once the freelancer has approved. `422 EXTRACT_INCOMPLETE` when no milestone or a zero amount comes back (nothing saved); `422 CURRENCY_MISMATCH` as in Conventions.
   - Gap `g1` (revision limit) is the one whose fix sets `rev_limit = 2` on every milestone.
 - `POST /api/agreements/:id/gaps/:gapId/fix` → `200 { agreement, milestones }`. Sets `fixed:true` and, when `term_key` is set, writes `term_value` into that term. `409 AGREEMENT_FROZEN`.
 - `PATCH /api/milestones/:id` `{ amount_minor }` → `200 { milestone, sum_minor, agreed_total_minor, mismatch:boolean }`. `400 BAD_AMOUNT` (not a non-negative integer). `409 AGREEMENT_FROZEN` once the freelancer has approved. Only `amount_minor` is accepted.
@@ -108,7 +109,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 - `POST /api/agreements/:id/approve` `{ party, content_hash? }`
   - `party:"freelancer"` freezes the body (milestone amounts included). It computes `content_hash = "sha256:" + hex(sha256(canonicalJSON({ body without translations, milestones:[{label,title,amount_minor,criteria,rev_limit}] })))` and sets `status:"sent"`. It returns `200 { agreement, client_url:"/?as=client&p=<project_id>" }`.
   - `party:"client"` must send a `content_hash` equal to the stored one, else `409 HASH_MISMATCH`. Before the freelancer approves it returns `409 NOT_SENT`. On success: `status:"approved"`, every milestone goes `draft → agreed`, and the response is `200 { agreement, milestones }`. No charge.
-  - Both approvals are stored in `agreement_approvals { agreement_id, party, content_hash, at }`.
+  - Both approvals are stored in the `approvals` collection `{ agreement_id, party, content_hash, at }`. Unknown `party` → `400 BAD_PARTY`.
 
 ### Step 5: Fund milestone
 - `POST /api/milestones/:id/order` (any request body is ignored) → `200 { order_id, status:"CREATED" }`.
