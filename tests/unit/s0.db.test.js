@@ -6,6 +6,7 @@ import path from 'node:path';
 import * as db from '../../db.js';
 import { createApp } from '../../server.js';
 import { testConfig } from './helpers.js';
+import { runWithUser } from '../../context.js';
 
 let dir;
 beforeEach(() => {
@@ -102,10 +103,11 @@ test('GET /api/config has the right shape and never contains the secret', async 
 });
 
 test('GET /api/ai-runs and JSON errors', async () => {
-  db.logAiRun({ task: 'extract', model: 'm', input_tokens: 1, output_tokens: 2, cost_usd: 0.1, latency_ms: 5 });
   await withServer(async (base) => {
     const r = await fetch(`${base}/auth/test-login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ name: 'Ploy' }) });
     const cookie = r.headers.getSetCookie()[0].split(';')[0];
+    const { user } = await r.json();
+    runWithUser(user.id, () => db.logAiRun({ task: 'extract', model: 'm', input_tokens: 1, output_tokens: 2, cost_usd: 0.1, latency_ms: 5 }));
     assert.equal((await fetch(`${base}/api/ai-runs`)).status, 401);
     const j = await (await fetch(`${base}/api/ai-runs`, { headers: { cookie } })).json();
     assert.equal(j.runs.length, 1);

@@ -10,6 +10,7 @@ import * as realAgent from './agent.js';
 import { createRoutes } from './routes.js';
 import { loadConfig } from './config.js';
 import { identity as realIdentity, authRouter, loadSession, requireUser } from './auth.js';
+import { securityHeaders, originCheck, rateLimit, requestLog } from './security.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,15 +43,43 @@ export function persistBeforeResponse(onPersistFail) {
 
 const exitOnPersistFail = () => setTimeout(() => process.exit(1), 100);
 
+const AI_ROUTES = [/^\/api\/projects$/, /^\/api\/projects\/[^/]+\/extract$/, /^\/api\/projects\/[^/]+\/change-requests$/, /^\/api\/demo$/];
+
 export function createApp({
   paypal = realPaypal, ai = realAi, agent = realAgent, identity = realIdentity, config = loadConfig(),
   agentOpts, fixturesDir, onPersistFail = exitOnPersistFail,
+  logSink = config.nodeEnv === 'test' ? () => {} : (line) => console.log(line),
 } = {}) {
   const app = express();
   app.set('trust proxy', 1);
+  app.disable('x-powered-by');
+  db.setUserBudget(config.aiUserDailyUsd);
+  app.use(requestLog(logSink));
+  app.use(securityHeaders({ https: !!config.appUrl?.startsWith('https://') }));
+
+  app.get('/healthz', async (_req, res) => {
+    try {
+      await db.ping();
+      res.json({ ok: true, db: db.backend() });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
+
   app.use(persistBeforeResponse(onPersistFail));
   app.use(express.json({ limit: '1mb' }));
+  app.use(originCheck());
   app.use(loadSession());
+  const L = config.rateLimits;
+  if (L) {
+    app.use('/auth', rateLimit({ key: (req) => `auth:${req.ip}`, limit: L.auth }));
+    app.use('/api', rateLimit({
+      key: (req) => (req.method === 'POST' && AI_ROUTES.some((re) => re.test(req.baseUrl + req.path)) ? `ai:${req.user?.id ?? req.ip}` : null),
+      limit: L.ai,
+    }));
+    app.use('/api', rateLimit({ key: (req) => `api:${req.user?.id ?? req.ip}`, limit: L.api }));
+  }
+
   app.use('/auth', authRouter({ identity, config }));
   // Invite links land in the app, which handles login and shows the join screen.
   app.get('/invite/:token', (req, res) => {
@@ -61,10 +90,11 @@ export function createApp({
 
   app.get('/api/config', (_req, res) => {
     res.json({
-      paypal_client_id: process.env.PAYPAL_CLIENT_ID || '',
+      paypal_client_id: config.paypalClientId || process.env.PAYPAL_CLIENT_ID || '',
       currency: process.env.API_CURRENCY || 'USD',
       api_currency: process.env.API_CURRENCY || 'USD',
       env: 'sandbox',
+      test_auth: config.testAuth,
       budget: {
         today_cost_usd: db.todayCostUsd(),
         limit_usd: db.BUDGET_LIMIT_USD,
@@ -78,11 +108,12 @@ export function createApp({
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '')
       ? req.query.date
       : new Date().toISOString().slice(0, 10);
-    const runs = db.aiRunsOn(date);
+    const runs = db.aiRunsOn(date).filter((r) => r.user_id === req.user.id);
     res.json({ runs, total_cost_usd: runs.reduce((s, r) => s + (r.cost_usd || 0), 0) });
   });
 
-  app.use('/api/lab', labRouter());
+  if (!config.prod) app.use('/api/lab', labRouter());
+  else app.get(['/lab.html', '/lab.js'], (_req, res) => res.status(404).end());
   app.use('/api', createRoutes({ paypal, ai, agent, config, ...(agentOpts ? { agentOpts } : {}), ...(fixturesDir ? { fixturesDir } : {}) }));
 
   app.use(express.static(path.join(HERE, 'public')));

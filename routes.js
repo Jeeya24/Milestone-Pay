@@ -1047,6 +1047,30 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ project_id: i.project_id });
   });
 
+  // ---- Account deletion (beta courtesy) ------------------------------------
+  // Refused while any of the user's freelance projects has money on hold; otherwise removes those projects with
+  // every row and file, the user's client memberships and sessions, and blanks the user row.
+  r.delete('/me', (req, res) => {
+    const d = D();
+    const uid = req.user.id;
+    const own = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'freelancer').map((m) => m.project_id));
+    if (d.milestones.some((m) => own.has(m.project_id) && VOIDABLE_STATES.includes(m.status))) {
+      throw E('ACTIVE_HOLDS', 'A client has money on hold in one of your projects. Finish or cancel those milestones first.', 409);
+    }
+    const ags = new Set(d.agreements.filter((a) => own.has(a.project_id)).map((a) => a.id));
+    const ms = new Set(d.milestones.filter((m) => own.has(m.project_id)).map((m) => m.id));
+    for (const c of db.COLLECTIONS) {
+      if (c === 'users' || c === 'ai_runs') continue;
+      d[c] = d[c].filter((row) => !(own.has(row.id) || own.has(row.project_id) || ags.has(row.agreement_id) || ms.has(row.milestone_id)
+        || (c === 'sessions' && row.user_id === uid) || (c === 'project_members' && row.user_id === uid)));
+    }
+    const u = d.users.find((x) => x.id === uid);
+    Object.assign(u, { deleted_at: now(), email: null, name: null, paypal_user_id: null });
+    db.save();
+    for (const pid of own) fs.rmSync(path.join(uploadsRoot(), pid), { recursive: true, force: true });
+    res.json({ ok: true, deleted_projects: own.size });
+  });
+
   // ---- Step 9: project page ------------------------------------------------
   r.get('/projects/:id', need('project'), (req, res) => {
     const p = getProject(req.params.id);

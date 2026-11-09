@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pgstore from './pgstore.js';
+import { currentUserId } from './context.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let dbPath = null;
@@ -182,7 +183,7 @@ export function currentMilestone(projectId) {
 
 export function logAiRun({ task, model, input_tokens = 0, output_tokens = 0, cost_usd = 0, latency_ms = 0, fallback = false }) {
   load().ai_runs.push({
-    at: new Date().toISOString(), task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback: !!fallback,
+    at: new Date().toISOString(), user_id: currentUserId(), task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback: !!fallback,
   });
   save();
 }
@@ -197,11 +198,24 @@ export function todayCostUsd() {
 }
 
 export const BUDGET_LIMIT_USD = 1;
+let userBudgetUsd = 0.25;
+export function setUserBudget(usd) { if (usd > 0) userBudgetUsd = usd; }
 
 export function assertBudget() {
   if (todayCostUsd() >= BUDGET_LIMIT_USD) {
     throw new AppError('BUDGET_EXCEEDED', 'Daily AI budget reached', 429);
   }
+  const uid = currentUserId();
+  if (uid) {
+    const today = new Date().toISOString().slice(0, 10);
+    const mine = aiRunsOn(today).filter((r) => r.user_id === uid).reduce((t, r) => t + (r.cost_usd || 0), 0);
+    if (mine >= userBudgetUsd) throw new AppError('BUDGET_EXCEEDED', 'You reached today\'s AI limit. Try again tomorrow.', 429);
+  }
+}
+
+/** Health check: file backend is always up; pg runs SELECT 1. */
+export async function ping() {
+  if (mode === 'pg') await pgstore.ping();
 }
 
 export function activity(projectId, who, text) {

@@ -16,6 +16,7 @@ const schema = z.object({
   AI_USER_DAILY_USD: z.coerce.number().positive().optional(),
   UPLOAD_DIR: z.string().optional(),
   TEST_AUTH: z.string().optional(),
+  RATE_LIMITS: z.enum(['on', 'off']).optional(),
 });
 
 let warned = false;
@@ -46,5 +47,7 @@ export function loadConfig(env = process.env) {
     aiUserDailyUsd: e.AI_USER_DAILY_USD ?? 0.25,
     uploadDir: e.UPLOAD_DIR || null,
     testAuth: !prod && e.TEST_AUTH === '1',
+    // RATE_LIMITS=off only outside production (long scripted runs such as scripts/e2e.js).
+    rateLimits: !prod && e.RATE_LIMITS === 'off' ? null : { auth: 20, ai: 10, api: 120 },
   };
 }
