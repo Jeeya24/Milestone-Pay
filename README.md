@@ -39,7 +39,7 @@ Everyone logs in with **Log in with PayPal** using a PayPal *sandbox personal* a
 The demo project is a website for a cafe called **Baan Kafe**: freelancer Ploy, client Nok, four parts (M1 to M3 agreed up front, M4 added later).
 
 1. **Freelancer review.** On the first screen open the Baan Kafe project (or press **Try the demo project**). Read the agreement. The demo is already set up with a revision limit and both sides' approval, so M1 is ready to pay. (A fresh project would use **Approve & send to client** here.)
-2. **Open the client view.** Tick **Judge mode** (demo projects only) to see Nok's phone next to your screen. On a real project you would press **Create invite link** and send it to the client, who logs in with their own PayPal sandbox account.
+2. **Invite the client.** Press **Create invite link** and send it to the client, who opens it in another browser (or a private window) and logs in with their own PayPal sandbox account.
 3. **Client pays M1.** In the client view, under **Pay $240.00 with PayPal**, click the yellow **PayPal** button. A PayPal window opens. Log in with the **fake test buyer** shown in the blue box on the page (never your own PayPal) and approve. PayPal now *holds* the money; nothing is paid out yet.
 4. **Freelancer delivers.** Back in the freelancer tab, under **Add files** click **Choose Files** and pick any PDF, PNG, JPG, ZIP or MP4. Press **Upload 1 file**, then **Submit for review**.
 5. **Client approves and pays.** In the client tab review the files and press **Approve & pay**. The agent checks the order with PayPal, asks for the client's approval, and the money is released. The release trace shows each step.
@@ -49,7 +49,6 @@ The demo project is a website for a cafe called **Baan Kafe**: freelancer Ploy, 
 9. **Client accepts.** The client presses **Accept** (or **Decline**). M4 appears as a new milestone and becomes payable after M3 is paid.
 10. **Project page.** Open the project to see milestones, the payment ledger, activity and the **Milestone Agent runs**. Press **Refresh from PayPal** to re-check every payment directly with PayPal.
 11. **Guardrail test.** Press **Test the guardrail**. It tries to make the agent release money without the client's approval. It must be refused.
-12. **Judge mode.** On the dashboard, click **Open in Judge mode** on the project (shown once the agreement is approved), or tick **Judge mode (both sides)** at the top right of any page. Freelancer and client appear side by side and update live.
 
 **Seeing the money moves in PayPal.** Go to [sandbox.paypal.com](https://www.sandbox.paypal.com) and log in as the sandbox **business** account (the seller; see Testing Tools > Sandbox Accounts). Open **Activity** to see authorizations, payments and refunds.
 

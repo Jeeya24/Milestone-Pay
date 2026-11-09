@@ -7,7 +7,7 @@ const IS_CLIENT = params.get('as') === 'client';
 let CLIENT_PID = params.get('p');
 const IS_EMBED = params.get('embed') === '1';
 const ACT_AS_CLIENT = IS_CLIENT;
-let JUDGE = params.get('judge') === '1' && !IS_CLIENT;
+let JUDGE = false; // side-by-side demo view, switched off for the beta (no UI entry point)
 let CFG = null;
 let ME = null;
 const SANDBOX_NOTE = 'Sandbox beta: payments go to the Milestone Pay demo merchant, not your own PayPal yet.';
@@ -147,7 +147,6 @@ async function viewDash() {
           p.open_change_request && p.open_change_request.from === 'client' && p.open_change_request.status === 'open'
             ? el('button', { class: 'badge-btn', onclick: () => go(`/p/${p.id}/scope`) }, `● ${p.client || 'Client'} requested a change`) : null),
         el('div', { class: 'row' },
-          ['draft', 'sent'].includes(p.status) || !p.is_demo ? null : el('a', { class: 'small', href: `?judge=1&p=${encodeURIComponent(p.id)}#/p/${p.id}` }, 'Open in Judge mode'),
           el('button', { onclick: () => go(`/p/${p.id}`) }, 'Open'))))
     : el('div', { class: 'empty' }, el('b', {}, 'No projects yet'), 'Paste a LINE or WhatsApp chat to turn it into an agreement.', el('br'), el('br'),
         el('button', { class: 'primary', onclick: () => go('/new') }, 'Paste a chat'), ' ', demoBtn);
@@ -1045,14 +1044,6 @@ function syncPhone(pid) {
   if (!pid) { phonePid = null; f.removeAttribute('src'); return; }
   if (pid !== phonePid) { phonePid = pid; f.src = `?as=client&p=${encodeURIComponent(pid)}&embed=1`; }
 }
-function setJudge(on) {
-  JUDGE = on; document.body.classList.toggle('judge', on); $('#judgeTog').checked = on;
-  const u = new URL(location.href);
-  if (on) u.searchParams.set('judge', '1'); else { u.searchParams.delete('judge'); u.searchParams.delete('p'); }
-  history.replaceState(null, '', u);
-  if (!on) { phonePid = null; $('#phoneFrame').removeAttribute('src'); }
-  route();
-}
 
 // ---------------------------------------------------------------- auth: login, user menu, invites
 function toLogin() {
@@ -1061,7 +1052,7 @@ function toLogin() {
 }
 
 function viewLogin() {
-  $('#judgeLabel').hidden = true; $('#homeLink').style.display = 'none'; $('#side').textContent = '';
+  $('#homeLink').style.display = 'none'; $('#side').textContent = '';
   const why = params.get('login');
   const next = location.pathname + location.search.replace(/[?&]login=\w+/, '') + location.hash;
   const testForm = CFG?.test_auth ? (() => {
@@ -1139,10 +1130,8 @@ async function viewInvite(token) {
     if (e.status === 401) return viewLogin();
   }
   userMenu();
-  if (IS_CLIENT) { $('#judgeLabel').hidden = true; return viewClient(); }
+  if (IS_CLIENT) return viewClient();
   $('#side').textContent = 'Freelancer';
-  $('#judgeTog').addEventListener('change', (e) => setJudge(e.target.checked));
-  document.body.classList.toggle('judge', JUDGE); $('#judgeTog').checked = JUDGE;
   window.addEventListener('hashchange', route);
   if (JUDGE && params.get('p') && !location.hash.replace(/^#/, '')) location.hash = `#/p/${params.get('p')}`;
   else route();

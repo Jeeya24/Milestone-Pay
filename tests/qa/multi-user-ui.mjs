@@ -73,12 +73,7 @@ try {
   const nextIn = oauth ? JSON.parse(Buffer.from(decodeURIComponent(oauth.value).split('.')[0], 'base64url').toString()).next : null;
   ok('B: login will return to the same screen', nextIn === before, { nextIn, before });
 
-  // Judge mode on a demo project
-  const demo = await a.ev(`(async()=>(await (await fetch('/api/demo',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).json()).project_id)()`);
-  await a.goto(`${base}/?judge=1&p=${demo}#/p/${demo}`);
-  ok('A: judge phone frame loads demo client', await a.waitFor(`(()=>{const f=document.querySelector('#phoneFrame');return f&&!f.hidden&&f.contentDocument&&/Baan Kafe|shared an agreement with you/i.test(f.contentDocument.body.innerText)})()`, 15000), await a.ev(`document.querySelector('#phoneFrame')?.contentDocument?.body?.innerText?.slice(0,300)`));
-  await a.goto(`${base}/#/`);
-  ok('A: judge link only on demo project', await a.waitFor(`document.querySelectorAll('a[href*="judge=1"]').length===0 || [...document.querySelectorAll('a[href*="judge=1"]')].every(x=>x.href.includes(${JSON.stringify(demo)}))`));
+  ok('A: no Judge mode toggle or links', await a.ev(`!document.querySelector('#judgeTog') && !document.querySelector('a[href*="judge=1"]')`));
   await a.click('Log out', { exact: true }); await sleep(800);
   ok('A: logout returns to login', await a.waitFor(`document.body.innerText.includes('Log in to Milestone Pay')`));
 } catch (e) {
