@@ -226,7 +226,7 @@ const money = (minor, cur) => new Intl.NumberFormat('en-US', { style: 'currency'
 
 // ---------------------------------------------------------------------------
 
-export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = process.env.FIXTURES_DIR || FIXTURES }) {
+export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = process.env.FIXTURES_DIR || FIXTURES, config = {} }) {
   const r = express.Router();
   const runAgent = (event, id, extra = {}) => agent.runAgent(event, id, { paypal, ...agentOpts, ...extra });
 
@@ -996,6 +996,55 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       }
     }
     res.json({ payments });
+  });
+
+  // ---- Client invites ------------------------------------------------------
+  // A freelancer shares a link; the client logs in with PayPal and accepts it. One live invite per project.
+  const INVITE_DAYS = 7;
+  const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
+  const appBase = (req) => config.appUrl || `${req.protocol}://${req.get('host')}`;
+
+  r.post('/projects/:id/invites', need('project', 'freelancer'), (req, res) => {
+    const d = D();
+    for (const i of d.invites) if (i.project_id === req.projectId && !i.used_by && !i.revoked) i.revoked = true;
+    const token = crypto.randomBytes(32).toString('base64url');
+    d.invites.push({
+      id: db.id('inv'), project_id: req.projectId, token_hash: sha256(token), created_by: req.user.id, created_at: now(),
+      expires_at: new Date(Date.now() + INVITE_DAYS * 864e5).toISOString(), used_by: null, used_at: null, revoked: false,
+    });
+    db.save();
+    res.status(201).json({ url: `${appBase(req)}/invite/${token}` });
+  });
+
+  /** The invite for a raw token, or 404. Throws INVITE_USED / INVITE_EXPIRED unless this user already used it. */
+  function usableInvite(token, user) {
+    const i = typeof token === 'string' ? D().invites.find((x) => x.token_hash === sha256(token)) : null;
+    if (!i || !D().projects.some((p) => p.id === i.project_id)) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
+    if (i.used_by === user.id) return i;
+    if (i.used_by || i.revoked) throw E('INVITE_USED', 'This invite link was already used. Ask the freelancer for a new one.', 409);
+    if (Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
+    return i;
+  }
+
+  r.get('/invites/:token', (req, res) => {
+    const i = usableInvite(req.params.token, req.user);
+    const p = D().projects.find((x) => x.id === i.project_id);
+    const f = memberWithRole(p.id, 'freelancer');
+    const fname = D().users.find((u) => u.id === f?.user_id)?.name ?? p.freelancer_name ?? null;
+    res.json({ project: { id: p.id, title: p.title ?? null }, freelancer: { name: fname } });
+  });
+
+  r.post('/invites/:token/accept', (req, res) => {
+    const i = usableInvite(req.params.token, req.user);
+    const role = roleOf(req.user.id, i.project_id);
+    if (role === 'client') return res.json({ project_id: i.project_id });
+    if (role === 'freelancer') throw E('SELF_INVITE', 'This is your own project. Send the link to your client instead.', 409);
+    if (memberWithRole(i.project_id, 'client')) throw E('CLIENT_TAKEN', 'This project already has a client.', 409);
+    D().project_members.push({ project_id: i.project_id, user_id: req.user.id, role: 'client', at: now() });
+    Object.assign(i, { used_by: req.user.id, used_at: now() });
+    db.save();
+    db.activity(i.project_id, 'client', `${req.user.name || 'The client'} joined the project`);
+    res.json({ project_id: i.project_id });
   });
 
   // ---- Step 9: project page ------------------------------------------------

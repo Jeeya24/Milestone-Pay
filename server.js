@@ -52,6 +52,11 @@ export function createApp({
   app.use(express.json({ limit: '1mb' }));
   app.use(loadSession());
   app.use('/auth', authRouter({ identity, config }));
+  // Invite links land in the app, which handles login and shows the join screen.
+  app.get('/invite/:token', (req, res) => {
+    const t = req.params.token;
+    res.redirect(302, /^[A-Za-z0-9_-]{1,100}$/.test(t) ? `/#/invite/${t}` : '/');
+  });
   app.get('/api/me', requireUser, (req, res) => res.json({ user: req.user }));
 
   app.get('/api/config', (_req, res) => {
@@ -78,7 +83,7 @@ export function createApp({
   });
 
   app.use('/api/lab', labRouter());
-  app.use('/api', createRoutes({ paypal, ai, agent, ...(agentOpts ? { agentOpts } : {}), ...(fixturesDir ? { fixturesDir } : {}) }));
+  app.use('/api', createRoutes({ paypal, ai, agent, config, ...(agentOpts ? { agentOpts } : {}), ...(fixturesDir ? { fixturesDir } : {}) }));
 
   app.use(express.static(path.join(HERE, 'public')));
 
