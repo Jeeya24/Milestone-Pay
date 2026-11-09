@@ -1,0 +1,38 @@
+-- One table per store collection. data holds the row exactly as the app sees it (money stays integer).
+-- seq keeps array order: rows load ORDER BY seq, and an upsert never changes it.
+CREATE TABLE IF NOT EXISTS projects (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS projects_project_idx ON projects (project_id);
+CREATE TABLE IF NOT EXISTS agreements (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS agreements_project_idx ON agreements (project_id);
+CREATE TABLE IF NOT EXISTS approvals (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS approvals_project_idx ON approvals (project_id);
+CREATE TABLE IF NOT EXISTS messages (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS messages_project_idx ON messages (project_id);
+CREATE TABLE IF NOT EXISTS milestones (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS milestones_project_idx ON milestones (project_id);
+CREATE TABLE IF NOT EXISTS payments (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS payments_project_idx ON payments (project_id);
+CREATE TABLE IF NOT EXISTS deliverables (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS deliverables_project_idx ON deliverables (project_id);
+CREATE TABLE IF NOT EXISTS proposals (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS proposals_project_idx ON proposals (project_id);
+CREATE TABLE IF NOT EXISTS ledger (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS ledger_project_idx ON ledger (project_id);
+CREATE TABLE IF NOT EXISTS activity (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS activity_project_idx ON activity (project_id);
+CREATE TABLE IF NOT EXISTS notifications (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS notifications_project_idx ON notifications (project_id);
+CREATE TABLE IF NOT EXISTS agent_runs (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS agent_runs_project_idx ON agent_runs (project_id);
+CREATE TABLE IF NOT EXISTS change_requests (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS change_requests_project_idx ON change_requests (project_id);
+CREATE TABLE IF NOT EXISTS ai_runs (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS ai_runs_project_idx ON ai_runs (project_id);
+CREATE TABLE IF NOT EXISTS users (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS users_project_idx ON users (project_id);
+CREATE TABLE IF NOT EXISTS sessions (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS sessions_project_idx ON sessions (project_id);
+CREATE TABLE IF NOT EXISTS project_members (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS project_members_project_idx ON project_members (project_id);
+CREATE TABLE IF NOT EXISTS invites (rid text PRIMARY KEY, seq bigserial, project_id text, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS invites_project_idx ON invites (project_id);

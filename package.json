@@ -11,7 +11,8 @@
     "seed": "node seed.js",
     "test": "node --test \"tests/**/*.test.js\"",
     "smoke": "node scripts/smoke.js",
-    "e2e": "node scripts/e2e.js"
+    "e2e": "node scripts/e2e.js",
+    "test:pg": "PG_TESTS=1 node --env-file-if-exists=.env --test \"tests/pg/*.test.js\""
   },
   "dependencies": {
     "@ai-sdk/google": "^1.2.22",
@@ -21,6 +22,7 @@
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "multer": "^2.5.0",
+    "pg": "^8.23.1",
     "zod": "^3.25.76"
   }
 }

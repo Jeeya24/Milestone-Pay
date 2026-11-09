@@ -2,16 +2,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import pgstore from './pgstore.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let dbPath = null;
 let cache = null;
+let mode = 'file'; // 'file' (db.json, tests and quick local runs) | 'pg' (DATABASE_URL: Postgres write-through)
 
-const COLLECTIONS = [
+export const COLLECTIONS = [
   'projects', 'agreements', 'approvals', 'messages', 'milestones', 'payments',
   'deliverables', 'proposals', 'ledger', 'activity', 'notifications',
   'agent_runs', 'change_requests', 'ai_runs',
+  'users', 'sessions', 'project_members', 'invites',
 ];
+
+export const backend = () => mode;
 
 export function getPath() {
   return dbPath || process.env.DB_PATH || path.join(HERE, 'db.json');
@@ -21,6 +26,91 @@ export function getPath() {
 export function init(p) {
   dbPath = p || null;
   cache = null;
+  mode = 'file';
+}
+
+// ---------------------------------------------------------------------------
+// Postgres write-through. Memory is the working copy; save() diffs it against what was last committed and
+// queues one transaction. flush() resolves once every queued write has committed (server.js holds each
+// response on it). Single instance only: this process is the only writer.
+
+const ridOf = new WeakMap();     // row object -> rid (row.id, or a generated rid for rows without an id)
+const lastJson = new WeakMap();  // row object -> JSON last committed
+let lastRids = new Map();        // coll -> Set(rid) last committed
+let chain = Promise.resolve();
+let failed = null;
+
+function rid(row) {
+  if (typeof row.id === 'string' && row.id) return row.id;
+  let r = ridOf.get(row);
+  if (!r) { r = id('rid'); ridOf.set(row, r); }
+  return r;
+}
+
+/** Load from DATABASE_URL (pg) when set, else the JSON file. Replaces the in-memory cache. */
+export async function connect() {
+  const url = process.env.DATABASE_URL;
+  if (!url) { mode = 'file'; cache = null; load(); return; }
+  await chain.catch(() => {});
+  await pgstore.connect({ url, schema: process.env.DB_SCHEMA || 'public' });
+  const rows = await pgstore.loadAll(COLLECTIONS);
+  const data = empty();
+  lastRids = new Map();
+  for (const coll of COLLECTIONS) {
+    const set = new Set();
+    for (const { rid: r, data: row } of rows[coll] || []) {
+      if (!(typeof row.id === 'string' && row.id)) ridOf.set(row, r);
+      lastJson.set(row, JSON.stringify(row));
+      set.add(r);
+      data[coll].push(row);
+    }
+    lastRids.set(coll, set);
+  }
+  cache = data;
+  mode = 'pg';
+  failed = null;
+}
+
+function diff() {
+  const d = load();
+  const upserts = []; const deletes = []; const seen = new Map(); const json = [];
+  for (const coll of COLLECTIONS) {
+    const set = new Set();
+    for (const row of d[coll] || []) {
+      const r = rid(row);
+      set.add(r);
+      const j = JSON.stringify(row);
+      if (lastJson.get(row) !== j) {
+        // data is a snapshot, so later in-memory edits are not mistaken for committed ones.
+        upserts.push({ coll, rid: r, project_id: typeof row.project_id === 'string' ? row.project_id : null, data: JSON.parse(j) });
+        json.push([row, j]);
+      }
+    }
+    for (const r of lastRids.get(coll) || []) if (!set.has(r)) deletes.push({ coll, rid: r });
+    seen.set(coll, set);
+  }
+  return { upserts, deletes, seen, json };
+}
+
+function queuePg() {
+  const { upserts, deletes, seen, json } = diff();
+  if (!upserts.length && !deletes.length) return;
+  chain = chain.then(() => pgstore.flush({ upserts, deletes })).then(() => {
+    for (const [row, j] of json) lastJson.set(row, j);
+    lastRids = seen;
+  }, (e) => {
+    console.error('persist failed:', e.message);
+    failed = e;
+  });
+}
+
+/** Wait for every queued write. Rejects PERSIST_FAILED (500) if any failed since the last flush(). */
+export async function flush() {
+  await chain;
+  if (failed) {
+    failed = null;
+    throw new AppError('PERSIST_FAILED', 'Could not save. Please retry.', 500);
+  }
 }
 
 function empty() {
@@ -40,6 +130,7 @@ export function load() {
 
 /** Atomic: write <path>.tmp then rename over <path>. */
 export function save() {
+  if (mode === 'pg') return queuePg();
   const p = getPath();
   const tmp = p + '.tmp';
   fs.mkdirSync(path.dirname(p), { recursive: true });

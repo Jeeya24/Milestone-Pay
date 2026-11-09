@@ -11,8 +11,38 @@ import { createRoutes } from './routes.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, agentOpts, fixturesDir } = {}) {
+/**
+ * Hold every response until the store's queued writes have committed (pg backend). If they fail, the client
+ * gets 500 PERSIST_FAILED instead of a success that would vanish on restart, then onPersistFail runs
+ * (default: exit so Render restarts the process from Postgres).
+ */
+export function persistBeforeResponse(onPersistFail) {
+  return (_req, res, next) => {
+    if (db.backend() !== 'pg') return next();
+    const end = res.end;
+    res.end = function (...args) {
+      res.end = end;
+      db.flush().then(() => end.apply(res, args), (err) => {
+        if (res.headersSent) { end.apply(res, args); } else {
+          res.statusCode = 500;
+          res.removeHeader('Content-Length');
+          res.removeHeader('ETag');
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          end.call(res, JSON.stringify({ error: err.code || 'PERSIST_FAILED', message: 'Could not save. Please retry.' }));
+        }
+        onPersistFail(err);
+      });
+      return res;
+    };
+    next();
+  };
+}
+
+const exitOnPersistFail = () => setTimeout(() => process.exit(1), 100);
+
+export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, agentOpts, fixturesDir, onPersistFail = exitOnPersistFail } = {}) {
   const app = express();
+  app.use(persistBeforeResponse(onPersistFail));
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/config', (_req, res) => {
@@ -65,5 +95,10 @@ export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent,
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 3000;
-  createApp().listen(port, () => console.log(`Milestone Pay on http://localhost:${port}`));
+  await db.connect();
+  createApp().listen(port, () => console.log(`Milestone Pay on http://localhost:${port} (store: ${db.backend()})`));
+  process.on('SIGTERM', async () => {
+    await db.flush().catch(() => {});
+    process.exit(0);
+  });
 }
