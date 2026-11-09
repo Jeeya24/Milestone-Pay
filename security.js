@@ -1,12 +1,14 @@
 // HTTP hardening: security headers + CSP, same-origin check for writes, in-memory rate limits, request log.
 // In-memory state is fine because the app runs as a single instance (see the spec's persistence model).
+import crypto from 'node:crypto';
 import * as db from './db.js';
 
 const PAYPAL = 'https://www.paypal.com https://www.sandbox.paypal.com https://*.paypal.com https://*.paypalobjects.com';
 
-export const CSP = [
+/** CSP for one response. The nonce lets the PayPal SDK run its inline bootstrap (data-csp-nonce). */
+export const csp = (nonce) => [
   "default-src 'self'",
-  `script-src 'self' ${PAYPAL}`,
+  `script-src 'self' 'nonce-${nonce}' ${PAYPAL}`,
   `frame-src 'self' ${PAYPAL}`,
   `img-src 'self' data: blob: ${PAYPAL}`,
   `connect-src 'self' ${PAYPAL}`,
@@ -20,7 +22,8 @@ export const CSP = [
 
 export function securityHeaders({ https = false } = {}) {
   return (_req, res, next) => {
-    res.setHeader('Content-Security-Policy', CSP);
+    res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
+    res.setHeader('Content-Security-Policy', csp(res.locals.cspNonce));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
     if (https) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');

@@ -209,3 +209,6 @@ body.embed .wrap.narrow{padding-top:10px}
 .logo small{margin-left:6px;font-size:11px;color:var(--ink3)}
 .tablewrap td:first-child,.tablewrap td.num{white-space:nowrap}
 .tablewrap td.mono{white-space:nowrap}
+/* auth + beta */
+.sandbox-note{border:1.5px dashed var(--note);background:var(--note-bg);border-radius:8px;padding:6px 10px;margin:8px 0}
+header .user{color:var(--ink);opacity:.8}

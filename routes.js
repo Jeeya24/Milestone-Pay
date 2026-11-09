@@ -216,7 +216,7 @@ function projectView(p) {
   }
   return {
     id: p.id, title: p.title ?? null, status, freelancer: p.freelancer ?? p.freelancer_name,
-    client: p.client ?? null, freelancer_name: p.freelancer_name, created_at: p.created_at,
+    client: p.client ?? null, freelancer_name: p.freelancer_name, created_at: p.created_at, is_demo: !!p.is_demo,
   };
 }
 
@@ -338,7 +338,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         const cr = d.change_requests.find((c) => c.project_id === p.id && (c.status === 'open' || c.status === 'sent'));
         const v = projectView(p);
         return {
-          id: p.id, my_role: myRole.get(p.id), title: v.title, freelancer: v.freelancer, client: v.client,
+          id: p.id, my_role: myRole.get(p.id), is_demo: v.is_demo, title: v.title, freelancer: v.freelancer, client: v.client,
           total_minor: ms.reduce((s, m) => s + m.amount_minor, 0), status: v.status,
           milestones: ms.map((m) => ({ id: m.id, label: m.label, status: m.status })),
           open_change_request: cr ? { id: cr.id, from: cr.from, status: cr.status } : null,

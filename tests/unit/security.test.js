@@ -158,3 +158,15 @@ test('createApp with a production config refuses test-login', async () => {
   assert.equal(r.status, 404);
   await new Promise((r2) => server.close(r2));
 });
+
+test('index.html carries a per-request CSP nonce that the PayPal SDK can use', async () => {
+  await boot();
+  const one = await fetch(app.base + '/');
+  const html = await one.text();
+  const meta = /<meta name="csp-nonce" content="([A-Za-z0-9+/=]{20,})">/.exec(html)?.[1];
+  assert.ok(meta, 'nonce meta present');
+  assert.ok(one.headers.get('content-security-policy').includes(`'nonce-${meta}'`));
+  assert.ok(!html.includes('{{CSP_NONCE}}'));
+  const two = await (await fetch(app.base + '/index.html')).text();
+  assert.notEqual(/content="([^"]+)">/.exec(two.match(/<meta name="csp-nonce"[^>]*>/)[0])[1], meta);
+});

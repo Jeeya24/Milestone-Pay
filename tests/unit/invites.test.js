@@ -125,6 +125,8 @@ test('demo project: freelancer is the user, demo client attached, Judge act-as r
   assert.equal(p.is_demo, true);
   const v = await F.call('GET', `/api/projects/${pid}`);
   assert.equal(v.body.my_role, 'freelancer');
+  assert.equal(v.body.project.is_demo, true);
+  assert.equal((await F.call('GET', '/api/projects')).body.projects[0].is_demo, true);
   assert.deepEqual(v.body.members.map((m) => m.role).sort(), ['client', 'freelancer']);
   const a = v.body.agreement;
   for (const g of a.body.gaps) await F.call('POST', `/api/agreements/${a.id}/gaps/${g.id}/fix`);

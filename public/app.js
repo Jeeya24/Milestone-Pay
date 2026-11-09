@@ -1,11 +1,17 @@
 // Milestone Pay frontend. All user/AI text is set via textContent (el helper). No innerHTML with data.
 const $ = (s) => document.querySelector(s);
 const params = new URLSearchParams(location.search);
+// ?as=client is the Judge-mode phone view of a DEMO project: the freelancer acts as the demo client (X-Act-As).
+// Real clients log in and open #/p/<id>; the server's my_role decides which view they get.
 const IS_CLIENT = params.get('as') === 'client';
-const CLIENT_PID = params.get('p');
+let CLIENT_PID = params.get('p');
 const IS_EMBED = params.get('embed') === '1';
+const ACT_AS_CLIENT = IS_CLIENT;
 let JUDGE = params.get('judge') === '1' && !IS_CLIENT;
 let CFG = null;
+let ME = null;
+const SANDBOX_NOTE = 'Sandbox beta: payments go to the Milestone Pay demo merchant, not your own PayPal yet.';
+const sandboxNote = () => el('div', { class: 'note sandbox-note small' }, SANDBOX_NOTE);
 
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -32,13 +38,15 @@ function parseMinor(s) {
 const major = (minor) => (minor / 100).toFixed(2);
 
 async function api(path, opts = {}) {
-  const init = { method: opts.method || (opts.body !== undefined || opts.form ? 'POST' : 'GET') };
+  const init = { method: opts.method || (opts.body !== undefined || opts.form ? 'POST' : 'GET'), headers: {} };
+  if (ACT_AS_CLIENT) init.headers['X-Act-As'] = 'client';
   if (opts.form) init.body = opts.form;
-  else if (opts.body !== undefined) { init.headers = { 'Content-Type': 'application/json' }; init.body = JSON.stringify(opts.body); }
+  else if (opts.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
   let res;
   try { res = await fetch(path, init); }
   catch { throw Object.assign(new Error('Could not reach the server. Check that it is running and try again.'), { code: 'NETWORK' }); }
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !opts.noLoginRedirect) { toLogin(); throw Object.assign(new Error('Please log in.'), { code: 'UNAUTHENTICATED', status: 401 }); }
   if (!res.ok) throw Object.assign(new Error(data.message || (res.status === 404 ? 'This action is not available on the server yet (404).' : `Something went wrong (${res.status}).`)), { code: data.error, status: res.status, data });
   return data;
 }
@@ -103,6 +111,8 @@ function keepFocus(fn) {
 function route() {
   closeModal(); stopPoll();
   const h = location.hash.replace(/^#/, '') || '/';
+  const inv = /^\/invite\/([\w-]+)$/.exec(h);
+  if (inv) { syncPhone(null); return viewInvite(inv[1]); }
   if (h === '/new') { syncPhone(null); return viewNew(); }
   const m = /^\/p\/([\w-]+)(?:\/(scope))?/.exec(h);
   syncPhone(m ? m[1] : null);
@@ -118,7 +128,9 @@ async function viewDash() {
   let data;
   try { data = await api('/api/projects'); }
   catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: viewDash }, 'Try again'))); }
-  const { projects, totals } = data;
+  const { totals } = data;
+  const projects = data.projects.filter((p) => p.my_role === 'freelancer');
+  const paying = data.projects.filter((p) => p.my_role === 'client');
   const cur = CFG?.currency || 'USD';
   const stat = (v, l) => el('div', { class: 'stat' }, el('b', {}, money(v, cur)), el('span', {}, l));
   const demoBtn = el('button', { onclick: async (ev) => {
@@ -135,7 +147,7 @@ async function viewDash() {
           p.open_change_request && p.open_change_request.from === 'client' && p.open_change_request.status === 'open'
             ? el('button', { class: 'badge-btn', onclick: () => go(`/p/${p.id}/scope`) }, `● ${p.client || 'Client'} requested a change`) : null),
         el('div', { class: 'row' },
-          ['draft', 'sent'].includes(p.status) ? null : el('a', { class: 'small', href: `?judge=1&p=${encodeURIComponent(p.id)}#/p/${p.id}` }, 'Open in Judge mode'),
+          ['draft', 'sent'].includes(p.status) || !p.is_demo ? null : el('a', { class: 'small', href: `?judge=1&p=${encodeURIComponent(p.id)}#/p/${p.id}` }, 'Open in Judge mode'),
           el('button', { onclick: () => go(`/p/${p.id}`) }, 'Open'))))
     : el('div', { class: 'empty' }, el('b', {}, 'No projects yet'), 'Paste a LINE or WhatsApp chat to turn it into an agreement.', el('br'), el('br'),
         el('button', { class: 'primary', onclick: () => go('/new') }, 'Paste a chat'), ' ', demoBtn);
@@ -144,9 +156,15 @@ async function viewDash() {
       el('h2', {}, 'Your projects'),
       el('div', { class: 'row' }, projects.length ? demoBtn : null, el('button', { class: 'primary', onclick: () => go('/new') }, '+ New project'))),
     el('div', { id: 'dashErr' }),
+    sandboxNote(),
     el('div', { class: 'grid3', style: 'margin-bottom:14px' },
       stat(totals.held_minor, 'Held by PayPal (authorized)'), stat(totals.paid_minor, 'Paid to you'), stat(totals.not_funded_minor, 'Not funded yet')),
-    list));
+    list,
+    paying.length ? el('h2', { style: 'margin-top:22px' }, "Projects you're paying for") : null,
+    paying.map((p) => el('div', { class: 'card row', style: 'justify-content:space-between' },
+      el('div', {}, el('b', {}, p.title || 'Project'), el('span', { class: 'muted small' }, ` · from ${p.freelancer || 'freelancer'} · ${money(p.total_minor || 0, cur)}`), el('br'),
+        (p.milestones || []).map((m) => [el('span', { class: `pill ${m.status}` }, `${m.label} ${pillText(m.status)}`), ' '])),
+      el('button', { onclick: () => go(`/p/${p.id}`) }, 'Open')))));
 }
 
 // ---------------------------------------------------------------- new project (vNew)
@@ -231,7 +249,8 @@ const R = { data: null, hl: null, tr: false, showAgreement: false, pid: null };
 async function viewReview(pid) {
   mount(el('div', { class: 'wrap' }, loadingBox('Loading the agreement…')));
   try { R.data = await api(`/api/projects/${pid}`); R.hl = null; R.tr = false; R.showAgreement = false; R.pid = pid; Pj.picked = []; Pj.err = null; Pj.msg = null; Pj.upPct = null; Pj.busy = false; Pj.rf = null; Pj.gd = null; }
-  catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: () => viewReview(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
+  catch (e) { return mount(el('div', { class: 'wrap' }, e.status === 404 ? notFoundBox() : errBox(e), el('button', { onclick: () => viewReview(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
+  if (R.data.my_role === 'client') { CLIENT_PID = pid; return viewClient(); }
   renderFreelancer();
   if (JUDGE || ['sent', 'active'].includes(R.data.project?.status)) startPoll(pid, (d) => d.project?.status === 'sent' || d.project?.status === 'active', () => sigOf(R.data), (d) => { R.data = d; }, () => keepFocus(renderFreelancer), () => Pj.busy);
 }
@@ -296,7 +315,7 @@ function drawReview(err) {
   const apBtn = frozen ? null : el('button', { class: 'primary', id: 'apBtn', onclick: async (ev) => {
     ev.target.disabled = true; ev.target.textContent = 'Sending…';
     try {
-      const r = await api(`/api/agreements/${agreement.id}/approve`, { body: { party: 'freelancer' } });
+      const r = await api(`/api/agreements/${agreement.id}/approve`, { body: {} });
       R.data.agreement = r.agreement; drawReview();
     } catch (e) { drawReview(e); }
   } }, 'Approve & send to client');
@@ -325,14 +344,11 @@ function drawReview(err) {
   });
   setMismatch(sum);
 
-  const clientUrl = `${location.origin}/?as=client&p=${project.id}`;
   let approveArea;
   if (frozen) {
     approveArea = el('div', {},
-      el('div', { class: 'okbox' }, agreement.status === 'approved' ? '✓ Both of you approved this agreement.' : '✓ You approved version 1 and it is frozen. Send this link to your client:',
-        el('div', { class: 'linkbox', style: 'margin-top:6px' }, el('input', { readonly: true, value: clientUrl, 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
-          el('button', { onclick: () => copyText(clientUrl, 'Client link') }, 'Copy link'),
-          el('a', { href: clientUrl, target: '_blank', rel: 'noopener' }, el('button', { class: 'primary' }, 'Open client view'))),
+      el('div', { class: 'okbox' }, agreement.status === 'approved' ? '✓ Both of you approved this agreement.' : '✓ You approved version 1 and it is frozen. Invite your client to review and approve it:',
+        el('div', { style: 'margin-top:6px' }, inviteBox(R.data)),
         agreement.content_hash ? el('div', { style: 'margin-top:6px' }, 'Fingerprint ', el('span', { class: 'hash' }, agreement.content_hash.slice(0, 22) + '…')) : null));
   } else {
     approveArea = el('div', {}, apBtn, apHint);
@@ -452,7 +468,6 @@ function drawProject() {
   const d = R.data; const { project, agreement, milestones = [] } = d;
   const cur = agreement.body.currency || CFG?.currency || 'USD';
   const clientName = project.client || 'the client';
-  const clientUrl = `${location.origin}/?as=client&p=${project.id}`;
   const cards = milestones.map((m) => {
     const card = el('div', { class: `ms${m.is_current ? ' cur' : ''}` },
       el('div', { class: 'top' }, el('b', {}, `${m.label} · ${m.title}`), el('span', { class: 'row', style: 'gap:8px' }, money(m.amount_minor, m.currency || cur), pill(m.status))),
@@ -480,11 +495,9 @@ function drawProject() {
     cur_m ? submitPanel(cur_m, d) : null,
     el('h4', { style: 'margin-top:14px' }, 'Milestones'),
     milestones.length ? cards : el('div', { class: 'empty' }, el('b', {}, 'No milestones'), 'This agreement has no milestones.'),
-    el('div', { class: 'card' }, el('h4', {}, 'Client link'),
-      el('div', { class: 'linkbox' }, el('input', { readonly: true, value: clientUrl, 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
-        el('button', { onclick: () => copyText(clientUrl, 'Client link') }, 'Copy link'),
-        el('a', { href: clientUrl, target: '_blank', rel: 'noopener' }, el('button', {}, 'Open client view')),
-        el('button', { class: 'ghost', onclick: () => { R.showAgreement = true; renderFreelancer(); } }, 'View agreement'))),
+    el('div', { class: 'card' }, el('h4', {}, 'Client'),
+      inviteBox(d),
+      el('div', { class: 'row', style: 'margin-top:8px' }, el('button', { class: 'ghost', onclick: () => { R.showAgreement = true; renderFreelancer(); } }, 'View agreement'))),
     changeCard(d),
     timelineCard(milestones),
     ledgerCard(d, cur, el('button', { class: 'small ghost', disabled: Pj.rf?.busy, onclick: doRefresh }, Pj.rf?.busy ? 'Checking PayPal…' : 'Refresh from PayPal')),
@@ -635,7 +648,8 @@ const VERDICT = {
 async function viewScope(pid) {
   mount(el('div', { class: 'wrap' }, loadingBox('Loading change requests…')));
   try { R.data = await api(`/api/projects/${pid}`); R.pid = pid; }
-  catch (e) { return mount(el('div', { class: 'wrap' }, errBox(e), el('button', { onclick: () => viewScope(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
+  catch (e) { return mount(el('div', { class: 'wrap' }, e.status === 404 ? notFoundBox() : errBox(e), el('button', { onclick: () => viewScope(pid) }, 'Try again'), ' ', el('button', { onclick: () => go('/') }, 'Back to projects'))); }
+  if (R.data.my_role === 'client') { CLIENT_PID = pid; return viewClient(); }
   Sc.err = null; Sc.createErr = null; Sc.q = null; Sc.busy = false; Sc.creating = false;
   drawScope();
   startPoll(pid, () => true, () => sigOf(R.data), (x) => { R.data = x; }, () => keepFocus(drawScope), () => Sc.busy || Sc.creating);
@@ -671,7 +685,7 @@ function newRequestForm(project) {
     oninput: () => { Sc.text = ta.value; btn.disabled = Sc.creating || Sc.text.trim().length < 5; } });
   const btn = el('button', { class: 'primary', disabled: Sc.creating || Sc.text.trim().length < 5, onclick: async () => {
     Sc.creating = true; Sc.createErr = null; drawScope();
-    try { await api(`/api/projects/${project.id}/change-requests`, { body: { message: Sc.text.trim(), from: 'freelancer' } }); Sc.text = ''; Sc.id = null; R.data = await api(`/api/projects/${project.id}`); }
+    try { await api(`/api/projects/${project.id}/change-requests`, { body: { message: Sc.text.trim() } }); Sc.text = ''; Sc.id = null; R.data = await api(`/api/projects/${project.id}`); }
     catch (e) { Sc.createErr = e; }
     Sc.creating = false; drawScope();
   } }, 'Check against agreement');
@@ -778,7 +792,9 @@ function loadPayPalSdk() {
   sdkPromise = new Promise((resolve, reject) => {
     if (!CFG?.paypal_client_id) return reject(new Error('PayPal is not set up on this server yet (missing client id).'));
     const q = new URLSearchParams({ 'client-id': CFG.paypal_client_id, intent: 'authorize', currency: CFG.api_currency || CFG.currency || 'USD', components: 'buttons', 'disable-funding': 'card,credit,paylater,venmo' });
-    const s = el('script', { src: `https://www.paypal.com/sdk/js?${q}` });
+    const nonce = document.querySelector('meta[name="csp-nonce"]')?.content || '';
+    const s = el('script', { src: `https://www.paypal.com/sdk/js?${q}`, 'data-csp-nonce': nonce || null });
+    if (nonce) s.nonce = nonce;
     s.onload = () => (window.paypal ? resolve(window.paypal) : reject(new Error('The PayPal button did not load.')));
     s.onerror = () => reject(new Error('Could not load PayPal. Check your internet connection and try again.'));
     document.head.append(s);
@@ -787,7 +803,8 @@ function loadPayPalSdk() {
 }
 
 async function viewClient() {
-  $('#side').textContent = 'Client'; $('#side').classList.add('client'); $('#homeLink').style.display = 'none';
+  $('#side').textContent = 'Client'; $('#side').classList.add('client');
+  if (IS_CLIENT) $('#homeLink').style.display = 'none';
   if (!CLIENT_PID) return mount(el('div', { class: 'wrap narrow' }, el('div', { class: 'empty' }, el('b', {}, 'No agreement link'), 'Ask the freelancer for the link they shared with you.')));
   mount(el('div', { class: 'wrap narrow' }, loadingBox('Loading the agreement…')));
   let d;
@@ -825,7 +842,7 @@ function drawClient(d, msg) {
     wrap.append(el('div', { class: 'small muted', style: 'margin-bottom:8px' }, 'Fingerprint ', el('span', { class: 'hash' }, (agreement.content_hash || '').slice(0, 22) + '…')),
       el('button', { class: 'primary', style: 'width:100%', onclick: async (ev) => {
         ev.target.disabled = true; ev.target.textContent = 'Approving…';
-        try { await api(`/api/agreements/${agreement.id}/approve`, { body: { party: 'client', content_hash: agreement.content_hash } }); viewClient(); }
+        try { await api(`/api/agreements/${agreement.id}/approve`, { body: { content_hash: agreement.content_hash } }); viewClient(); }
         catch (e) { ev.target.disabled = false; ev.target.textContent = 'Approve agreement'; errSlot.replaceChildren(errBox(e)); }
       } }, 'Approve agreement'),
       el('p', { class: 'small muted', style: 'margin-top:6px' }, "Approving doesn't charge you."), errSlot);
@@ -855,7 +872,7 @@ function drawClient(d, msg) {
       const slot = el('div', { class: 'pp-wrap' }, loadingBox('Loading the PayPal button…'));
       const err = el('div');
       const prev = milestones.filter((x) => x.seq < m.seq && x.status === 'paid').length;
-      card.append(el('div', { style: 'margin-top:8px' }, prev ? el('div', { style: 'font-size:11px;margin-bottom:6px' }, 'Next up. Fund it so work can start.') : null,
+      card.append(el('div', { style: 'margin-top:8px' }, prev ? el('div', { style: 'font-size:11px;margin-bottom:6px' }, 'Next up. Fund it so work can start.') : null, sandboxNote(),
         el('div', { class: 'small' }, `Pay ${money(m.amount_minor, m.currency || cur)} with PayPal`), slot, err,
         el('div', { class: 'muted', style: 'font-size:11px;text-align:center;margin-top:4px' }, "PayPal holds this amount. It's paid out only when you approve the work."),
         el('div', { id: `tl-${m.id}` })));
@@ -923,7 +940,7 @@ function changeForm(d, fname) {
   const send = el('button', { class: 'primary', disabled: C.crText.trim().length < 5, onclick: async () => {
     C.crBusy = true; C.crErr = null; redrawClient();
     try {
-      await api(`/api/projects/${CLIENT_PID}/change-requests`, { body: { message: C.crText.trim(), from: 'client' } });
+      await api(`/api/projects/${CLIENT_PID}/change-requests`, { body: { message: C.crText.trim() } });
       C.crText = ''; C.crOpen = false; C.msg = el('div', { class: 'okbox' }, `Request sent to ${fname}. They will check it and reply with a price if it is new work.`);
     } catch (e) { C.crErr = e.message + (e.code && e.code !== 'NETWORK' ? ` (${e.code})` : ''); }
     C.crBusy = false;
@@ -973,14 +990,14 @@ function reviewCard(m, d, cur, fname, left) {
     !prop ? el('p', { class: 'muted small' }, 'Waiting for the payment request to be prepared. This page updates by itself.') : null,
     el('div', { class: 'col-btns' },
       el('button', { class: 'primary', disabled: C.busy || !prop, onclick: () => act(async () => {
-        const r = await api(`/api/proposals/${prop.id}/approve`, { body: { party: 'client' } });
+        const r = await api(`/api/proposals/${prop.id}/approve`, { body: {} });
         C.release = r; C.msg = null;
       }) }, C.busy ? 'Working…' : `Approve & pay ${money(m.amount_minor, m.currency || cur)}`),
       el('button', { disabled: C.busy || limitHit, onclick: () => { C.revOpen = !C.revOpen; redrawClient(); } }, 'Request revision'),
       el('button', { class: 'ghost', disabled: C.busy || !prop, onclick: () => showModal(el('h3', {}, `Cancel ${m.label} and release the hold?`),
         el('p', { class: 'small' }, 'You are not charged. PayPal releases the hold and the work stops here.'),
         el('div', { class: 'row' }, el('button', { class: 'primary', onclick: () => { closeModal(); act(async () => {
-          await api(`/api/proposals/${prop.id}/cancel`, { body: { party: 'client' } });
+          await api(`/api/proposals/${prop.id}/cancel`, { body: {} });
           C.msg = el('div', { class: 'okbox' }, 'Cancelled. You were not charged and the PayPal hold is released.');
         }); } }, 'Yes, cancel and release'), el('button', { onclick: closeModal }, 'Keep it'))) }, 'Cancel & release hold')),
     limitHit ? el('p', { class: 'small muted' }, 'No revision rounds left. You can approve or cancel.') : el('p', { class: 'small muted' }, left != null ? `${left} revision round${left === 1 ? '' : 's'} left.` : 'Revision rounds: no limit set.'),
@@ -1037,10 +1054,91 @@ function setJudge(on) {
   route();
 }
 
+// ---------------------------------------------------------------- auth: login, user menu, invites
+function toLogin() {
+  const next = location.pathname + location.search + location.hash;
+  location.href = `/auth/paypal/start?next=${encodeURIComponent(next)}`;
+}
+
+function viewLogin() {
+  $('#judgeLabel').hidden = true; $('#homeLink').style.display = 'none'; $('#side').textContent = '';
+  const why = params.get('login');
+  const next = location.pathname + location.search.replace(/[?&]login=\w+/, '') + location.hash;
+  const testForm = CFG?.test_auth ? (() => {
+    const name = el('input', { id: 'testName', placeholder: 'Name (local testing only)', 'aria-label': 'Test user name' });
+    const err = el('div');
+    return el('div', { class: 'card', style: 'margin-top:14px' }, el('h4', {}, 'Test login (TEST_AUTH=1)'),
+      el('div', { class: 'row' }, name, el('button', { onclick: async () => {
+        try { await api('/auth/test-login', { body: { name: name.value }, noLoginRedirect: true }); location.reload(); }
+        catch (e) { err.replaceChildren(errBox(e)); }
+      } }, 'Log in')), err);
+  })() : null;
+  mount(el('div', { class: 'wrap narrow' },
+    el('h2', {}, 'Log in to Milestone Pay'),
+    why === 'cancelled' ? el('div', { class: 'err', role: 'alert' }, 'Login cancelled. You can try again whenever you are ready.') : null,
+    why === 'failed' ? el('div', { class: 'err', role: 'alert' }, 'PayPal could not log you in. Please try again.') : null,
+    el('p', { class: 'muted' }, 'Freelancers and clients both log in with a PayPal sandbox account. Nothing is charged.'),
+    el('a', { href: `/auth/paypal/start?next=${encodeURIComponent(next)}` }, el('button', { class: 'primary' }, 'Log in with PayPal')),
+    testForm));
+}
+
+function userMenu() {
+  if (!ME || IS_EMBED) return;
+  const out = el('button', { class: 'ghost small', onclick: async () => {
+    try { await api('/auth/logout', { body: {}, noLoginRedirect: true }); } catch { /* ignore */ }
+    location.href = '/';
+  } }, 'Log out');
+  $('header').append(el('span', { class: 'user small', id: 'userName' }, ME.name || ME.email || 'You'), out);
+}
+
+function notFoundBox() {
+  return el('div', { class: 'empty' }, el('b', {}, 'Project not found'), 'It does not exist, or it belongs to someone else.');
+}
+
+/** Freelancer's client slot: who joined, or a one-time invite link to share. */
+function inviteBox(d) {
+  const client = (d.members || []).find((m) => m.role === 'client');
+  if (client) return el('div', { class: 'small' }, `✓ ${client.name || 'Your client'} joined as the client.`);
+  const box = el('div', {});
+  const make = el('button', { class: 'primary', onclick: async () => {
+    make.disabled = true;
+    try {
+      const { url } = await api(`/api/projects/${d.project.id}/invites`, { body: {} });
+      box.replaceChildren(el('div', { class: 'small muted' }, 'Send this link to your client. It works once and expires in 7 days.'),
+        el('div', { class: 'linkbox', style: 'margin-top:6px' }, el('input', { readonly: true, value: url, 'aria-label': 'Invite link', onfocus: (e) => e.target.select() }),
+          el('button', { onclick: () => copyText(url, 'Invite link') }, 'Copy link')));
+    } catch (e) { make.disabled = false; box.append(errBox(e)); }
+  } }, 'Create invite link');
+  box.append(el('div', { class: 'small muted', style: 'margin-bottom:6px' }, 'No client yet.'), make);
+  return box;
+}
+
+async function viewInvite(token) {
+  mount(el('div', { class: 'wrap narrow' }, loadingBox('Opening the invite…')));
+  let info;
+  try { info = await api(`/api/invites/${token}`); }
+  catch (e) { return mount(el('div', { class: 'wrap narrow' }, errBox(e), el('button', { onclick: () => go('/') }, 'Go to your projects'))); }
+  const err = el('div');
+  const join = el('button', { class: 'primary', onclick: async () => {
+    join.disabled = true;
+    try { const r = await api(`/api/invites/${token}/accept`, { body: {} }); go(`/p/${r.project_id}`); }
+    catch (e) { join.disabled = false; err.replaceChildren(errBox(e)); }
+  } }, 'Join as the client');
+  mount(el('div', { class: 'wrap narrow' }, el('div', { class: 'card' },
+    el('h2', {}, info.project.title || 'A project'),
+    el('p', {}, `${info.freelancer.name || 'A freelancer'} invited you to review this agreement and pay for it milestone by milestone as the client.`),
+    el('p', { class: 'muted small' }, 'Approving the agreement costs nothing. You choose when to fund each part with PayPal.'),
+    join, err)));
+}
+
 // ---------------------------------------------------------------- boot
 (async function boot() {
   if (IS_EMBED) document.body.classList.add('embed');
   try { CFG = await api('/api/config'); } catch (e) { /* PayPal button will show its own error */ }
+  try { ME = (await api('/api/me', { noLoginRedirect: true })).user; } catch (e) {
+    if (e.status === 401) return viewLogin();
+  }
+  userMenu();
   if (IS_CLIENT) { $('#judgeLabel').hidden = true; return viewClient(); }
   $('#side').textContent = 'Freelancer';
   $('#judgeTog').addEventListener('change', (e) => setJudge(e.target.checked));

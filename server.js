@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
@@ -116,7 +117,12 @@ export function createApp({
   else app.get(['/lab.html', '/lab.js'], (_req, res) => res.status(404).end());
   app.use('/api', createRoutes({ paypal, ai, agent, config, ...(agentOpts ? { agentOpts } : {}), ...(fixturesDir ? { fixturesDir } : {}) }));
 
-  app.use(express.static(path.join(HERE, 'public')));
+  // index.html is served with this response's CSP nonce (the PayPal SDK needs it for its inline script).
+  const indexHtml = fs.readFileSync(path.join(HERE, 'public', 'index.html'), 'utf8');
+  app.get(['/', '/index.html'], (_req, res) => {
+    res.set('Cache-Control', 'no-store').type('html').send(indexHtml.replace('{{CSP_NONCE}}', res.locals.cspNonce));
+  });
+  app.use(express.static(path.join(HERE, 'public'), { index: false }));
 
   app.use('/api', (_req, _res, next) => {
     next(new db.AppError('NOT_FOUND', 'No such endpoint', 404));
