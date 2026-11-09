@@ -55,7 +55,7 @@ test('create: stores ai_draft and a copy in draft; classifier sees the frozen su
 test('create: validation errors', async () => {
   const { pid } = await setup();
   assert.equal((await create(pid, 'hey')).body.error, 'MESSAGE_TOO_SHORT');
-  assert.equal((await create(pid, 'long enough message', 'bob')).body.error, 'BAD_PARTY');
+  // `from` in the body is ignored now: the session's role decides (see access.test.js)
   assert.equal((await create('prj_nope')).status, 404);
   assert.equal(summaries.length, 0);
   const long = await create(pid, 'x'.repeat(5000));

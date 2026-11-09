@@ -81,15 +81,20 @@ export function safeNext(next) {
 
 const userView = (u) => ({ id: u.id, name: u.name || null, email: u.email || null });
 
-export function createSession(req, res, userId, config) {
+/** Store a new session (hashed) and return its raw token. Also used by seed.js for its in-process calls. */
+export function issueSessionToken(userId, { ip = null, userAgent = '' } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
-  const d = db.load();
-  d.sessions.push({
+  db.load().sessions.push({
     id: db.id('ses'), id_hash: sha256(token), user_id: userId, created_at: now(),
     expires_at: new Date(Date.now() + SESSION_DAYS * 864e5).toISOString(),
-    ip: req.ip || null, user_agent: String(req.get('user-agent') || '').slice(0, 200),
+    ip, user_agent: String(userAgent).slice(0, 200),
   });
   db.save();
+  return token;
+}
+
+export function createSession(req, res, userId, config) {
+  const token = issueSessionToken(userId, { ip: req.ip || null, userAgent: req.get('user-agent') || '' });
   addCookie(res, cookie('mp_sid', token, { maxAgeMs: SESSION_DAYS * 864e5, secure: isHttps(config) }));
 }
 

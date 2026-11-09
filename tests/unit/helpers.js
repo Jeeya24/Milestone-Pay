@@ -15,7 +15,7 @@ export function tmpEnv(prefix) {
   return dir;
 }
 
-export async function startApp(stubs = {}) {
+export async function startApp({ raw = false, ...stubs } = {}) {
   // Default: never call a live model from a test. S6 tests pass their own agentOpts.
   const app = createApp({ agentOpts: { forceFallback: true }, config: testConfig(), ...stubs });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
@@ -32,7 +32,34 @@ export async function startApp(stubs = {}) {
     let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
     return { status: res.status, body: json, setCookie: res.headers.getSetCookie() };
   };
-  return { call, close: () => new Promise((r) => server.close(r)), base };
+  const close = () => new Promise((r) => server.close(r));
+  if (raw) return { call, close, base };
+  const auto = await autoRoleCaller(call);
+  return { call: auto, rawCall: call, cookies: auto.cookies, close, base };
+}
+
+/**
+ * Legacy suites (s3-s8) were written before auth. This caller logs in a freelancer and a client and picks the
+ * session per request: a legacy body saying party/from 'client' goes as the client; otherwise the freelancer,
+ * retried as the client on 403 WRONG_ROLE. Projects it creates get the client joined. Real role enforcement is
+ * tested in access.test.js, not here.
+ */
+async function autoRoleCaller(call) {
+  const F = await login(call, 'Ploy');
+  const C = await login(call, 'Nok');
+  const caller = async (method, url, body, headers = {}) => {
+    const legacyClient = body && !(body instanceof FormData) && (body.party === 'client' || body.from === 'client');
+    let r = await (legacyClient ? C : F).call(method, url, body, headers);
+    if (!legacyClient && r.status === 403 && r.body?.error === 'WRONG_ROLE') r = await C.call(method, url, body, headers);
+    const pid = r.status === 201 && method === 'POST' && (url === '/api/projects' ? r.body?.project?.id : url === '/api/demo' ? r.body?.project_id : null);
+    if (pid && !db.load().project_members.some((m) => m.project_id === pid && m.role === 'client')) {
+      db.load().project_members.push({ project_id: pid, user_id: C.user.id, role: 'client', at: new Date().toISOString() });
+      db.save();
+    }
+    return r;
+  };
+  caller.cookies = { freelancer: F.cookie, client: C.cookie };
+  return caller;
 }
 
 export const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);

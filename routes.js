@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as db from './db.js';
+import { need, membersOf, roleOf, memberWithRole } from './access.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, 'fixtures');
@@ -137,6 +138,8 @@ const deliverableUploader = multer({
 // Shapes
 
 const D = () => db.load();
+export const DEMO_CLIENT_ID = 'usr_demo_client';
+const bodyMilestone = (req) => String(req.body?.milestone_id ?? '');
 const bySeq = (a, b) => a.seq - b.seq;
 
 function getProject(id) {
@@ -310,10 +313,11 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Step 1: dashboard ---------------------------------------------------
-  r.get('/projects', (_req, res) => {
+  r.get('/projects', (req, res) => {
     const d = D();
-    const projects = d.projects.filter((p) => p.source !== 'lab');
-    const ids = new Set(projects.map((p) => p.id));
+    const myRole = new Map(d.project_members.filter((m) => m.user_id === req.user.id).map((m) => [m.project_id, m.role]));
+    const projects = d.projects.filter((p) => p.source !== 'lab' && myRole.has(p.id));
+    const ids = new Set(projects.filter((p) => myRole.get(p.id) === 'freelancer').map((p) => p.id)); // totals: my freelance work
     const latest = new Map(); // milestone_id -> latest ledger event
     let paid = 0;
     for (const l of d.ledger) {
@@ -334,7 +338,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         const cr = d.change_requests.find((c) => c.project_id === p.id && (c.status === 'open' || c.status === 'sent'));
         const v = projectView(p);
         return {
-          id: p.id, title: v.title, freelancer: v.freelancer, client: v.client,
+          id: p.id, my_role: myRole.get(p.id), title: v.title, freelancer: v.freelancer, client: v.client,
           total_minor: ms.reduce((s, m) => s + m.amount_minor, 0), status: v.status,
           milestones: ms.map((m) => ({ id: m.id, label: m.label, status: m.status })),
           open_change_request: cr ? { id: cr.id, from: cr.from, status: cr.status } : null,
@@ -397,8 +401,12 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       }
 
       const d = D();
-      const project = { id: pid, title: null, status: 'draft', freelancer_name: freelancer, created_at: now() };
+      const project = {
+        id: pid, title: null, status: 'draft', freelancer_name: freelancer, created_at: now(),
+        owner_id: req.user.id, is_demo: false, payee_merchant_id: null,
+      };
       d.projects.push(project);
+      d.project_members.push({ project_id: pid, user_id: req.user.id, role: 'freelancer', at: now() });
       for (const m of messages) d.messages.push({ ...m, project_id: pid });
       db.save();
       db.activity(pid, 'sys', `Chat imported (${messages.length} messages)`);
@@ -417,7 +425,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     .map(({ project_id: _p, ...m }) => m);
 
   // ---- Step 3: agreement review -------------------------------------------
-  r.post('/projects/:id/extract', async (req, res) => {
+  r.post('/projects/:id/extract', need('project', 'freelancer'), async (req, res) => {
     const project = getProject(req.params.id);
     const old = agreementOf(project.id);
     if (isFrozen(old)) throw E('AGREEMENT_FROZEN', 'The freelancer already approved this agreement.', 409);
@@ -439,7 +447,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     });
   });
 
-  r.post('/agreements/:id/gaps/:gapId/fix', (req, res) => {
+  r.post('/agreements/:id/gaps/:gapId/fix', need('agreement', 'freelancer'), (req, res) => {
     const a = getAgreement(req.params.id);
     if (isFrozen(a)) throw E('AGREEMENT_FROZEN', 'The freelancer already approved this agreement.', 409);
     const gap = a.body.gaps.find((g) => g.id === req.params.gapId);
@@ -460,7 +468,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ agreement: agreementView(a), milestones: milestonesOf(a.project_id).map(milestoneView) });
   });
 
-  r.patch('/milestones/:id', (req, res) => {
+  r.patch('/milestones/:id', need('milestone', 'freelancer'), (req, res) => {
     const m = getMilestone(req.params.id);
     const a = agreementOf(m.project_id);
     if (isFrozen(a) || m.status !== 'draft') throw E('AGREEMENT_FROZEN', 'Amounts cannot change after the freelancer approves.', 409);
@@ -474,9 +482,10 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Step 4: approve agreement ------------------------------------------
-  r.post('/agreements/:id/approve', (req, res) => {
+  r.post('/agreements/:id/approve', need('agreement'), (req, res) => {
     const a = getAgreement(req.params.id);
-    const { party, content_hash } = req.body || {};
+    const party = req.role; // from membership, never from the body
+    const { content_hash } = req.body || {};
     const d = D();
     const ms = milestonesOf(a.project_id);
     const project = d.projects.find((p) => p.id === a.project_id);
@@ -492,11 +501,11 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         }
         a.content_hash = agreementHash(a, ms);
         a.status = 'sent';
-        d.approvals.push({ agreement_id: a.id, party: 'freelancer', content_hash: a.content_hash, at: now() });
+        d.approvals.push({ agreement_id: a.id, party: 'freelancer', user_id: req.actorUserId, content_hash: a.content_hash, at: now() });
         db.save();
         db.activity(a.project_id, 'free', `${project.freelancer || 'Freelancer'} approved the agreement and sent it to the client`);
       }
-      return res.json({ agreement: agreementView(a), client_url: `/?as=client&p=${a.project_id}` });
+      return res.json({ agreement: agreementView(a) });
     }
     if (party === 'client') {
       if (a.status === 'draft') throw E('NOT_SENT', 'The freelancer has not approved the agreement yet.', 409);
@@ -505,18 +514,17 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       }
       if (a.status === 'sent') {
         a.status = 'approved';
-        d.approvals.push({ agreement_id: a.id, party: 'client', content_hash: a.content_hash, at: now() });
+        d.approvals.push({ agreement_id: a.id, party: 'client', user_id: req.actorUserId, content_hash: a.content_hash, at: now() });
         for (const m of ms) if (m.status === 'draft') db.transition(m, 'agreed');
         db.save();
         db.activity(a.project_id, 'client', `${project.client || 'Client'} approved the agreement. Nothing was charged.`);
       }
       return res.json({ agreement: agreementView(a), milestones: ms.map(milestoneView) });
     }
-    throw E('BAD_PARTY', 'party must be "freelancer" or "client".');
   });
 
   // ---- Demo ----------------------------------------------------------------
-  r.post('/demo', async (_req, res) => {
+  r.post('/demo', async (req, res) => {
     const text = fs.readFileSync(path.join(fixturesDir, 'baan-kafe.txt'), 'utf8');
     const cache = path.join(fixturesDir, 'baan-kafe.extract.json');
     const messages = ai.parseChatText(text, { freelancerName: 'Ploy' });
@@ -528,7 +536,10 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       fs.writeFileSync(cache, JSON.stringify({ body: out.body, milestones: out.milestones, usage: out.usage }, null, 2));
     }
     const d = D();
-    const project = { id: db.id('prj'), title: null, status: 'draft', freelancer_name: 'Ploy', created_at: now() };
+    const project = {
+      id: db.id('prj'), title: null, status: 'draft', freelancer_name: 'Ploy', created_at: now(),
+      owner_id: req.user.id, is_demo: true, payee_merchant_id: null,
+    };
     for (const m of messages) d.messages.push({ ...m, project_id: project.id });
     d.projects.push(project);
     try {
@@ -539,6 +550,15 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       db.save();
       throw err;
     }
+    // The demo client is a placeholder user that can never log in; Judge mode acts as it (X-Act-As: client).
+    let demoClient = d.users.find((u) => u.id === DEMO_CLIENT_ID);
+    if (!demoClient) {
+      demoClient = { id: DEMO_CLIENT_ID, paypal_user_id: null, email: null, name: 'Nok (demo)', created_at: now(), last_login_at: null };
+      d.users.push(demoClient);
+    }
+    d.project_members.push({ project_id: project.id, user_id: req.user.id, role: 'freelancer', at: now() });
+    if (demoClient.id !== req.user.id) d.project_members.push({ project_id: project.id, user_id: demoClient.id, role: 'client', at: now() });
+    db.save();
     res.status(201).json({ project_id: project.id });
   });
 
@@ -552,7 +572,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     if (m.status !== 'agreed') throw E('NOT_CURRENT', 'This milestone is not waiting for payment.', 409);
   }
 
-  r.post('/milestones/:id/order', async (req, res) => {
+  r.post('/milestones/:id/order', need('milestone', 'client'), async (req, res) => {
     const m = getMilestone(req.params.id); // request body is ignored on purpose
     const out = await once(`order:${m.id}`, async () => {
       fundable(m);
@@ -571,7 +591,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json(out);
   });
 
-  r.post('/milestones/:id/authorize', async (req, res) => {
+  r.post('/milestones/:id/authorize', need('milestone', 'client'), async (req, res) => {
     const m = getMilestone(req.params.id);
     const orderId = req.body?.order_id;
     const pay = typeof orderId === 'string'
@@ -582,7 +602,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       fundable(m);
       const a = await pp(() => paypal.authorizeOrder(pay.order_id));
       db.transition(m, 'authorized');
-      Object.assign(pay, { status: 'AUTHORIZED', authorization_id: a.authorization_id, expires_at: a.expires_at || null });
+      Object.assign(pay, { status: 'AUTHORIZED', authorization_id: a.authorization_id, expires_at: a.expires_at || null, payer_user_id: req.actorUserId });
       db.save();
       db.ledgerAdd({
         project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'AUTHORIZED',
@@ -598,7 +618,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   // ---- Step 6: submit work -------------------------------------------------
   const SUBMITTABLE = ['authorized', 'revision_requested'];
 
-  r.post('/milestones/:id/deliverables', async (req, res) => {
+  r.post('/milestones/:id/deliverables', need('milestone', 'freelancer'), async (req, res) => {
     await parseUpload(req, res, deliverableUploader);
     const m = getMilestone(req.params.id);
     if (db.currentMilestone(m.project_id)?.id !== m.id || !SUBMITTABLE.includes(m.status)) {
@@ -627,7 +647,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.status(201).json({ deliverables: milestoneView(m).deliverables, version });
   });
 
-  r.post('/milestones/:id/submit', async (req, res) => {
+  r.post('/milestones/:id/submit', need('milestone', 'freelancer'), async (req, res) => {
     const m = getMilestone(req.params.id);
     const out = await once(`submit:${m.id}`, async () => {
       if (db.currentMilestone(m.project_id)?.id !== m.id) {
@@ -655,7 +675,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
 
   // ---- Step 7: client reviews ---------------------------------------------
   const DLV_ID = /^dlv_[a-f0-9]+$/;
-  r.get('/deliverables/:id/download', (req, res) => {
+  r.get('/deliverables/:id/download', need('deliverable'), (req, res) => {
     const id = req.params.id;
     const row = DLV_ID.test(id) ? D().deliverables.find((x) => x.id === id) : null;
     if (!row || !row.path) throw E('NOT_FOUND', 'File not found', 404);
@@ -673,7 +693,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
   });
 
-  r.post('/milestones/:id/revision', (req, res) => {
+  r.post('/milestones/:id/revision', need('milestone', 'client'), (req, res) => {
     const m = getMilestone(req.params.id);
     const note = (typeof req.body?.note === 'string' ? req.body.note : '').trim().slice(0, 1000);
     if (note.length < 5) throw E('NOTE_TOO_SHORT', 'Tell the freelancer what to change (at least 5 characters).');
@@ -715,9 +735,8 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     return e;
   }
 
-  r.post('/proposals/:id/approve', async (req, res) => {
+  r.post('/proposals/:id/approve', need('proposal', 'client'), async (req, res) => {
     const prop = getProposal(req.params.id);
-    if (req.body?.party !== 'client') throw E('BAD_PARTY', 'Only the client can approve a release.');
     const m = getMilestone(prop.milestone_id);
     // One lock per milestone for approve and cancel: a double click or a racing cancel cannot capture twice.
     const out = await once(`approve:${m.id}`, () => serial(`money:${m.id}`, async () => {
@@ -726,6 +745,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         if (m.status !== 'submitted') throw E('PROPOSAL_NOT_PENDING', 'This milestone is not waiting for review.', 409);
         prop.status = 'approved';
         prop.approved_by = 'client';
+        prop.approved_by_user = req.actorUserId;
         db.save();
         db.activity(m.project_id, 'client', `${m.label}: client approved the work and the release of ${money(m.amount_minor, m.currency)}`);
       } else if (prop.status === 'approved' && m.status === 'submitted') {
@@ -752,9 +772,8 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json(out);
   });
 
-  r.post('/proposals/:id/cancel', async (req, res) => {
+  r.post('/proposals/:id/cancel', need('proposal', 'client'), async (req, res) => {
     const prop = getProposal(req.params.id);
-    if (req.body?.party !== 'client') throw E('BAD_PARTY', 'Only the client can cancel a milestone.');
     const m = getMilestone(prop.milestone_id);
     const out = await once(`cancel:${m.id}`, () => serial(`money:${m.id}`, async () => {
       const d = D();
@@ -771,7 +790,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       if (!vp) {
         vp = {
           id: db.id('prop'), project_id: m.project_id, milestone_id: m.id, action: 'void', status: 'approved',
-          reason: 'Client cancelled the milestone', approved_by: 'client', created_at: now(),
+          reason: 'Client cancelled the milestone', approved_by: 'client', approved_by_user: req.actorUserId, created_at: now(),
         };
         d.proposals.push(vp);
       }
@@ -786,7 +805,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json(out);
   });
 
-  r.post('/agent/run', async (req, res) => {
+  r.post('/agent/run', need('milestone', null, bodyMilestone), async (req, res) => {
     const { event, milestone_id } = req.body || {};
     if (!['milestone.submitted', 'proposal.approved', 'proposal.voided'].includes(event)) throw E('BAD_EVENT', 'Unknown agent event.');
     const m = getMilestone(String(milestone_id ?? ''));
@@ -794,7 +813,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ agent_run });
   });
 
-  r.post('/agent/guardrail-test', async (req, res) => {
+  r.post('/agent/guardrail-test', need('milestone', null, bodyMilestone), async (req, res) => {
     const m = getMilestone(String(req.body?.milestone_id ?? ''));
     res.json(await agent.guardrailTest(m.id, { paypal }));
   });
@@ -820,10 +839,9 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     };
   }
 
-  r.post('/projects/:id/change-requests', async (req, res) => {
+  r.post('/projects/:id/change-requests', need('project'), async (req, res) => {
     const p = getProject(req.params.id);
-    const from = req.body?.from;
-    if (from !== 'client' && from !== 'freelancer') throw E('BAD_PARTY', 'from must be "client" or "freelancer".');
+    const from = req.role;
     const text = (typeof req.body?.message === 'string' ? req.body.message : '').trim().slice(0, 1000);
     if (text.length < 5) throw E('MESSAGE_TOO_SHORT', 'Describe the change in at least 5 characters.');
     const cr = await once(`cr:${p.id}`, async () => {
@@ -856,7 +874,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.status(201).json({ change_request: cr });
   });
 
-  r.patch('/change-requests/:id', (req, res) => {
+  r.patch('/change-requests/:id', need('change_request', 'freelancer'), (req, res) => {
     const c = getCr(req.params.id);
     if (c.status !== 'open') throw E('FROZEN', 'This request was already sent or closed.', 409);
     if (!c.draft) throw E('NOT_NEW_WORK', 'Only new work has a price to edit.', 409);
@@ -874,7 +892,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ change_request: c });
   });
 
-  r.post('/change-requests/:id/send', (req, res) => {
+  r.post('/change-requests/:id/send', need('change_request', 'freelancer'), (req, res) => {
     const c = getCr(req.params.id);
     if (c.status === 'sent') return res.json({ change_request: c }); // repeat call
     if (c.status !== 'open') throw E('FROZEN', 'This request was already decided or closed.', 409);
@@ -890,7 +908,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ change_request: c });
   });
 
-  r.post('/change-requests/:id/close', (req, res) => {
+  r.post('/change-requests/:id/close', need('change_request', 'freelancer'), (req, res) => {
     const c = getCr(req.params.id);
     if (c.status === 'closed') return res.json({ change_request: c });
     if (!crOpen(c)) throw E('FROZEN', 'This request was already decided.', 409);
@@ -900,7 +918,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ change_request: c });
   });
 
-  r.post('/change-requests/:id/decide', async (req, res) => {
+  r.post('/change-requests/:id/decide', need('change_request', 'client'), async (req, res) => {
     const c = getCr(req.params.id);
     if (typeof req.body?.accept !== 'boolean') throw E('BAD_REQUEST', 'accept must be true or false.');
     const accept = req.body.accept;
@@ -941,7 +959,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Step 9: refresh from PayPal -----------------------------------------
-  r.post('/projects/:id/refresh', async (req, res) => {
+  r.post('/projects/:id/refresh', need('project'), async (req, res) => {
     const p = getProject(req.params.id);
     const payments = [];
     for (const pay of D().payments.filter((x) => x.project_id === p.id && x.order_id)) {
@@ -981,9 +999,10 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Step 9: project page ------------------------------------------------
-  r.get('/projects/:id', (req, res) => {
+  r.get('/projects/:id', need('project'), (req, res) => {
     const p = getProject(req.params.id);
     const d = D();
+    const names = new Map(d.users.map((u) => [u.id, u.name]));
     const a = agreementOf(p.id);
     const mine = (rows) => rows.filter((x) => x.project_id === p.id);
     res.json({
@@ -998,6 +1017,8 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       agent_runs: mine(d.agent_runs),
       change_requests: mine(d.change_requests),
       ai_cost: { calls: d.ai_runs.length, cost_usd: d.ai_runs.reduce((s, x) => s + (x.cost_usd || 0), 0) },
+      my_role: req.role,
+      members: membersOf(p.id).map((m) => ({ role: m.role, name: names.get(m.user_id) ?? null })),
     });
   });
 

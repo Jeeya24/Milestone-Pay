@@ -157,7 +157,7 @@ test('download returns the exact bytes, stored mime, and inline vs attachment', 
   const bytes = Buffer.concat([PNG, Buffer.from('payload-123')]);
   const up = await upload(m1, [['Résumé draft.png', bytes, 'image/png']]);
   const url = up.body.deliverables[0].download_url;
-  const get = async (u) => { const x = await fetch(app.base + u); return { res: x, buf: Buffer.from(await x.arrayBuffer()) }; };
+  const get = async (u) => { const x = await fetch(app.base + u, { headers: { cookie: app.cookies.client } }); return { res: x, buf: Buffer.from(await x.arrayBuffer()) }; };
   let { res, buf } = await get(url);
   assert.equal(res.status, 200);
   assert.deepEqual(buf, bytes);
@@ -173,7 +173,7 @@ test('download: ../, encoded traversal, unknown and malformed ids are 404', asyn
   const { m1 } = await setup();
   await upload(m1);
   for (const bad of ['..%2F..%2Fdb.json', '../../db.json', 'dlv_zzzz', 'dlv_', 'dlv_00ff00ff00ff00ff', 'DLV_ABC', 'ms_abc']) {
-    const x = await fetch(`${app.base}/api/deliverables/${bad}/download`);
+    const x = await fetch(`${app.base}/api/deliverables/${bad}/download`, { headers: { cookie: app.cookies.client } });
     assert.equal(x.status, 404, bad);
   }
   assert.equal((await fetch(`${app.base}/uploads/anything`)).status, 404);

@@ -68,6 +68,7 @@ export function createApp({
     });
   });
 
+  app.use('/api', requireUser); // everything below needs a session; /api/config above stays public
   app.get('/api/ai-runs', (req, res) => {
     const date = /^\d{4}-\d{2}-\d{2}$/.test(req.query.date || '')
       ? req.query.date

@@ -164,7 +164,7 @@ test('approval flow: NOT_SENT, HASH_MISMATCH, frozen PATCH, milestones draft -> 
   const f = await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'freelancer' });
   assert.equal(f.status, 200);
   assert.equal(f.body.agreement.status, 'sent');
-  assert.equal(f.body.client_url, `/?as=client&p=${pid}`);
+  assert.equal(f.body.client_url, undefined); // clients join through invites now
   const hash = f.body.agreement.content_hash;
   assert.match(hash, /^sha256:[0-9a-f]{64}$/);
   // second freelancer approve does not add another approval or change the hash
@@ -190,7 +190,7 @@ test('approval flow: NOT_SENT, HASH_MISMATCH, frozen PATCH, milestones draft -> 
   assert.equal(c.body.milestones[0].fundable, true);
   assert.equal(c.body.milestones[1].fundable, false);
   assert.equal(db.load().approvals.length, 2);
-  assert.equal((await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'nobody' })).body.error, 'BAD_PARTY');
+  // an unknown party in the body is ignored: the session's role decides (see access.test.js)
 });
 
 test('GET /projects totals come from the ledger; GET /projects/:id has the full shape', async () => {

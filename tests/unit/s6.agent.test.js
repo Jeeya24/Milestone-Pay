@@ -37,6 +37,9 @@ const sleeper = () => new MockLanguageModelV1({
 });
 
 /** Project (revisions fixed), M1 funded via the stub, files uploaded, submitted. Agent runs in forced-fallback mode. */
+/** The client member's user id: a real approval is recorded with it (approved_by_user). */
+const clientIdOf = (pid) => db.load().project_members.find((x) => x.project_id === pid && x.role === 'client')?.user_id;
+
 async function setup({ upload = ['a.png'], submit = true } = {}) {
   tmpEnv('mp-s6-');
   pp = paypalStub();
@@ -102,8 +105,8 @@ test('a pending (not approved) proposal cannot be captured, even by a model that
 test('a capture proposal id from another milestone, and a void proposal used for capture, are refused', async () => {
   const { m1, m2, prop } = await setup();
   const d = db.load();
-  const other = { id: 'prop_other', project_id: d.milestones[0].project_id, milestone_id: m2, action: 'release', status: 'approved', approved_by: 'client' };
-  const voidP = { id: 'prop_void', project_id: other.project_id, milestone_id: m1, action: 'void', status: 'approved', approved_by: 'client' };
+  const other = { id: 'prop_other', project_id: d.milestones[0].project_id, milestone_id: m2, action: 'release', status: 'approved', approved_by: 'client', approved_by_user: clientIdOf(d.milestones[0].project_id) };
+  const voidP = { id: 'prop_void', project_id: other.project_id, milestone_id: m1, action: 'void', status: 'approved', approved_by: 'client', approved_by_user: other.approved_by_user };
   d.proposals.push(other, voidP);
   for (const id of ['prop_other', 'prop_void']) {
     assert.deepEqual(await realAgent.captureExecutor({ milestone_id: m1, proposal_id: id }, { paypal: pp }), { error: 'NO_APPROVAL' });
@@ -149,7 +152,7 @@ test('approve twice sequentially: one capture, same result; withdrawn proposal i
   assert.equal(w.status, 409);
   assert.equal(w.body.error, 'PROPOSAL_NOT_PENDING');
   assert.equal((await approve('prop_unknown')).status, 404);
-  assert.equal((await app.call('POST', `/api/proposals/${prop.id}/approve`, { party: 'freelancer' })).body.error, 'BAD_PARTY');
+  // party in the body no longer matters: the role comes from the session (see access.test.js)
 });
 
 test('approve twice concurrently: one capture, identical responses', async () => {
@@ -257,7 +260,7 @@ test('a model call that takes 9 s is cut off and the fallback runs', async () =>
   const { m1, prop } = await setup();
   assert.equal(realAgent.AGENT_TIMEOUT_MS, 8000);
   const d = db.load();
-  d.proposals.find((p) => p.id === prop.id).status = 'approved';
+  Object.assign(d.proposals.find((p) => p.id === prop.id), { status: 'approved', approved_by_user: clientIdOf(ms(m1).project_id) });
   const t0 = Date.now();
   const run = await realAgent.runAgent('proposal.approved', m1, { paypal: pp, model: sleeper(), timeoutMs: 300 });
   assert.ok(Date.now() - t0 < 3000);
@@ -270,7 +273,7 @@ test('a model call that takes 9 s is cut off and the fallback runs', async () =>
 test('model errors and an exhausted budget both fall back instead of failing', async () => {
   const { m1, prop } = await setup();
   const d = db.load();
-  d.proposals.find((p) => p.id === prop.id).status = 'approved';
+  Object.assign(d.proposals.find((p) => p.id === prop.id), { status: 'approved', approved_by_user: clientIdOf(ms(m1).project_id) });
   const boom = new MockLanguageModelV1({ doGenerate: async () => { throw new Error('upstream 500'); } });
   let run = await realAgent.runAgent('milestone.submitted', m1, { paypal: pp, model: boom });
   assert.equal(run.mode, 'fallback');

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as db from '../../db.js';
 import { createApp } from '../../server.js';
+import { testConfig } from './helpers.js';
 
 let dir;
 beforeEach(() => {
@@ -75,7 +76,7 @@ test('budget guard throws BUDGET_EXCEEDED (429) at $1', () => {
 });
 
 async function withServer(fn) {
-  const server = createApp().listen(0);
+  const server = createApp({ config: testConfig() }).listen(0);
   try {
     await fn(`http://127.0.0.1:${server.address().port}`);
   } finally {
@@ -103,10 +104,13 @@ test('GET /api/config has the right shape and never contains the secret', async 
 test('GET /api/ai-runs and JSON errors', async () => {
   db.logAiRun({ task: 'extract', model: 'm', input_tokens: 1, output_tokens: 2, cost_usd: 0.1, latency_ms: 5 });
   await withServer(async (base) => {
-    const j = await (await fetch(`${base}/api/ai-runs`)).json();
+    const r = await fetch(`${base}/auth/test-login`, { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ name: 'Ploy' }) });
+    const cookie = r.headers.getSetCookie()[0].split(';')[0];
+    assert.equal((await fetch(`${base}/api/ai-runs`)).status, 401);
+    const j = await (await fetch(`${base}/api/ai-runs`, { headers: { cookie } })).json();
     assert.equal(j.runs.length, 1);
     assert.equal(j.total_cost_usd, 0.1);
-    const nf = await fetch(`${base}/api/nope`);
+    const nf = await fetch(`${base}/api/nope`, { headers: { cookie } });
     assert.equal(nf.status, 404);
     assert.equal((await nf.json()).error, 'NOT_FOUND');
   });

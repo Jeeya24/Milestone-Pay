@@ -94,15 +94,19 @@ test('pg store', opts, async (t) => {
   await t.test('a request whose save fails returns 500 PERSIST_FAILED, not success', async () => {
     const { createApp } = await import('../../server.js');
     let exited = 0;
-    const app = createApp({ onPersistFail: () => { exited++; } });
+    const { loadConfig } = await import('../../config.js');
+    const app = createApp({ onPersistFail: () => { exited++; }, config: loadConfig({ NODE_ENV: 'test', TEST_AUTH: '1' }) });
     const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
     const base = `http://127.0.0.1:${server.address().port}`;
+    const lr = await fetch(base + '/auth/test-login', { method: 'POST', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ name: 'Ploy' }) });
+    assert.equal(lr.status, 200);
+    const cookie = lr.headers.getSetCookie()[0].split(';')[0];
     const real = pgstore.flush;
     pgstore.flush = async () => { throw new Error('network blip'); };
     try {
       const fd = new FormData();
       fd.append('chatText', 'Nok: hi\nPloy: hello');
-      const res = await fetch(base + '/api/projects', { method: 'POST', body: fd, headers: { origin: base } });
+      const res = await fetch(base + '/api/projects', { method: 'POST', body: fd, headers: { origin: base, cookie } });
       const body = await res.json();
       assert.equal(res.status, 500);
       assert.equal(body.error, 'PERSIST_FAILED');

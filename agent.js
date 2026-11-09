@@ -76,7 +76,7 @@ export async function captureExecutor({ milestone_id, proposal_id }, { paypal = 
   }
   const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && (p.status === 'CAPTURED' || p.status === 'AUTHORIZED'));
   if (pay?.status === 'CAPTURED' && pay.capture_id) return { ok: true, capture_id: pay.capture_id, status: 'CAPTURED', already: true };
-  if (prop.status !== 'approved' || m.status !== 'submitted') return { error: 'NO_APPROVAL' };
+  if (prop.status !== 'approved' || m.status !== 'submitted' || !approvedByClient(prop, m)) return { error: 'NO_APPROVAL' };
   if (!pay?.authorization_id) return { error: 'NO_AUTHORIZATION' };
 
   return single(`cap:${pay.authorization_id}`, async () => {
@@ -103,7 +103,7 @@ export async function voidExecutor({ milestone_id, proposal_id }, { paypal = rea
   }
   const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && (p.status === 'VOIDED' || p.status === 'AUTHORIZED'));
   if (pay?.status === 'VOIDED' && m.status === 'voided') return { ok: true, status: 'VOIDED', already: true };
-  if (prop.status !== 'approved' || !VOIDABLE.includes(m.status)) return { error: 'NO_APPROVAL' };
+  if (prop.status !== 'approved' || !VOIDABLE.includes(m.status) || !approvedByClient(prop, m)) return { error: 'NO_APPROVAL' };
   if (!pay?.authorization_id) return { error: 'NO_AUTHORIZATION' };
 
   return single(`void:${pay.authorization_id}`, async () => {
@@ -261,7 +261,13 @@ function makeTools(ctx) {
 // ---------------------------------------------------------------------------
 // What must have happened for the run to count as done, and the deterministic sequence.
 
-const approvedProposal = (m, action) => db.load().proposals.find((p) => p.milestone_id === m.id && p.action === action && p.status === 'approved');
+/** An approved proposal counts only if the project's client member approved it (projects with members). */
+function approvedByClient(p, m) {
+  const client = db.load().project_members.find((x) => x.project_id === m.project_id && x.role === 'client');
+  const hasMembers = db.load().project_members.some((x) => x.project_id === m.project_id);
+  return !hasMembers || (!!client && p.approved_by_user === client.user_id);
+}
+const approvedProposal = (m, action) => db.load().proposals.find((p) => p.milestone_id === m.id && p.action === action && p.status === 'approved' && approvedByClient(p, m));
 
 /** True when the money tool the event calls for is still outstanding. */
 function moneyOutstanding(event, m) {
