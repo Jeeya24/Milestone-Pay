@@ -7,8 +7,10 @@
   "permissions": {
     "deny": [
       "Read(./.env)",
-      "Bash(cat .env*)",
-      "Bash(git push*)"
+      "Bash(cat .env*)"
+    ],
+    "allow": [
+      "Bash(git push -u origin build/full-app)"
     ]
   }
 }
