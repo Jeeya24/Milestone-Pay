@@ -4,6 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import * as db from '../../db.js';
 import { createApp } from '../../server.js';
+import { loadConfig } from '../../config.js';
+
+export const testConfig = (extra = {}) => loadConfig({ ...process.env, NODE_ENV: 'test', TEST_AUTH: '1', APP_URL: '', ...extra });
 
 export function tmpEnv(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -14,11 +17,12 @@ export function tmpEnv(prefix) {
 
 export async function startApp(stubs = {}) {
   // Default: never call a live model from a test. S6 tests pass their own agentOpts.
-  const app = createApp({ agentOpts: { forceFallback: true }, ...stubs });
+  const app = createApp({ agentOpts: { forceFallback: true }, config: testConfig(), ...stubs });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (method, url, body, headers = {}) => {
     const isForm = body instanceof FormData;
+    headers = { origin: base, ...headers };
     const res = await fetch(base + url, {
       method,
       headers: isForm || body === undefined ? headers : { 'content-type': 'application/json', ...headers },
@@ -26,7 +30,7 @@ export async function startApp(stubs = {}) {
     });
     const text = await res.text();
     let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
-    return { status: res.status, body: json };
+    return { status: res.status, body: json, setCookie: res.headers.getSetCookie() };
   };
   return { call, close: () => new Promise((r) => server.close(r)), base };
 }
@@ -107,4 +111,13 @@ export async function approveBoth(call, agreementId) {
   const f = await call('POST', `/api/agreements/${agreementId}/approve`, { party: 'freelancer' });
   const c = await call('POST', `/api/agreements/${agreementId}/approve`, { party: 'client', content_hash: f.body.agreement.content_hash });
   return { f, c };
+}
+
+/** Log in through /auth/test-login. Returns the session cookie and a call() bound to it. */
+export async function login(call, name) {
+  const r = await call('POST', '/auth/test-login', { name });
+  if (r.status !== 200) throw new Error(`login ${name} failed: ${r.status}`);
+  const cookie = r.setCookie.find((c) => c.startsWith('mp_sid=')).split(';')[0];
+  const as = (method, url, body, headers = {}) => call(method, url, body, { cookie, ...headers });
+  return { cookie, user: r.body.user, call: as };
 }

@@ -8,6 +8,8 @@ import * as realPaypal from './paypal.js';
 import * as realAi from './ai.js';
 import * as realAgent from './agent.js';
 import { createRoutes } from './routes.js';
+import { loadConfig } from './config.js';
+import { identity as realIdentity, authRouter, loadSession, requireUser } from './auth.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -40,10 +42,17 @@ export function persistBeforeResponse(onPersistFail) {
 
 const exitOnPersistFail = () => setTimeout(() => process.exit(1), 100);
 
-export function createApp({ paypal = realPaypal, ai = realAi, agent = realAgent, agentOpts, fixturesDir, onPersistFail = exitOnPersistFail } = {}) {
+export function createApp({
+  paypal = realPaypal, ai = realAi, agent = realAgent, identity = realIdentity, config = loadConfig(),
+  agentOpts, fixturesDir, onPersistFail = exitOnPersistFail,
+} = {}) {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(persistBeforeResponse(onPersistFail));
   app.use(express.json({ limit: '1mb' }));
+  app.use(loadSession());
+  app.use('/auth', authRouter({ identity, config }));
+  app.get('/api/me', requireUser, (req, res) => res.json({ user: req.user }));
 
   app.get('/api/config', (_req, res) => {
     res.json({
