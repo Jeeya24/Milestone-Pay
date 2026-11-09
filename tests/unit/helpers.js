@@ -6,7 +6,7 @@ import * as db from '../../db.js';
 import { createApp } from '../../server.js';
 import { loadConfig } from '../../config.js';
 
-export const testConfig = (extra = {}) => loadConfig({ ...process.env, NODE_ENV: 'test', TEST_AUTH: '1', APP_URL: '', ...extra });
+export const testConfig = (extra = {}) => loadConfig({ ...process.env, NODE_ENV: 'test', TEST_AUTH: '1', APP_URL: '', DATABASE_URL: '', ...extra });
 
 export function tmpEnv(prefix) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

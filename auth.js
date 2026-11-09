@@ -71,6 +71,14 @@ function unsign(secret, s) {
   try { return JSON.parse(Buffer.from(v, 'base64url').toString('utf8')); } catch { return null; }
 }
 
+/** next with ?login=<flag> added before the hash, so the login screen can say why and still return there. */
+export function withLoginFlag(next, flag) {
+  const n = safeNext(next);
+  const i = n.indexOf('#');
+  const [p, h] = i < 0 ? [n, ''] : [n.slice(0, i), n.slice(i)];
+  return `${p}${p.includes('?') ? '&' : '?'}login=${flag}${h}`;
+}
+
 /** Only same-site absolute paths ("/x", "/#/p/1"); anything else becomes "/". */
 export function safeNext(next) {
   return typeof next === 'string' && /^\/(?![/\\])/.test(next) && !/[\r\n]/.test(next) ? next : '/';
@@ -163,20 +171,21 @@ export function authRouter({ identity: id = identity, config }) {
   r.get('/paypal/callback', async (req, res) => {
     const st = unsign(config.sessionSecret, parseCookies(req.get('cookie')).mp_oauth);
     addCookie(res, cookie('mp_oauth', '', { maxAgeMs: 0, secure: isHttps(config) }));
-    if (req.query.error) return res.redirect(302, '/?login=cancelled');
+    // Bad or expired state (e.g. login started in two tabs): back to the login screen, nothing else trusted.
     if (!st || typeof req.query.state !== 'string' || st.state !== req.query.state || Date.now() - st.at > OAUTH_COOKIE_MS) {
-      throw new db.AppError('BAD_STATE', 'Login link expired or was tampered with. Please log in again.', 400);
+      return res.redirect(302, '/?login=failed');
     }
-    if (typeof req.query.code !== 'string' || !req.query.code) return res.redirect(302, '/?login=failed');
+    if (req.query.error) return res.redirect(302, withLoginFlag(st.next, 'cancelled'));
+    if (typeof req.query.code !== 'string' || !req.query.code) return res.redirect(302, withLoginFlag(st.next, 'failed'));
     let info;
     try {
       const tok = await id.exchangeCode(req.query.code, redirectUri(req), config);
       info = await id.userInfo(tok.access_token);
     } catch (err) {
       console.error('login failed:', err.message);
-      return res.redirect(302, '/?login=failed');
+      return res.redirect(302, withLoginFlag(st.next, 'failed'));
     }
-    if (!info?.user_id) return res.redirect(302, '/?login=failed');
+    if (!info?.user_id) return res.redirect(302, withLoginFlag(st.next, 'failed'));
     const email = info.email || info.emails?.find((e) => e.primary)?.value || null;
     const u = upsertUser({ paypal_user_id: String(info.user_id), email, name: info.name ? String(info.name).slice(0, 80) : null });
     createSession(req, res, u.id, config);

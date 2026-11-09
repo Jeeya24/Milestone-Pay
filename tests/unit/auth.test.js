@@ -67,8 +67,8 @@ test('callback rejects a bad state and creates no session', async () => {
   await boot();
   const { oauth } = await startLogin();
   const res = await get('/auth/paypal/callback?code=C1&state=forged', oauth);
-  assert.equal(res.status, 400);
-  assert.equal((await res.json()).error, 'BAD_STATE');
+  assert.equal(res.status, 302, 'a browser lands on the login screen, not raw JSON');
+  assert.equal(res.headers.get('location'), '/?login=failed');
   assert.equal(db.load().sessions.length, 0);
   assert.equal(identity.calls.exchange.length, 0);
 });
@@ -78,7 +78,8 @@ test('callback rejects a tampered state cookie', async () => {
   const { state, oauth } = await startLogin();
   const [v] = oauth.split('.');
   const res = await get(`/auth/paypal/callback?code=C1&state=${state}`, `${v}.AAAA`);
-  assert.equal(res.status, 400);
+  assert.equal(res.headers.get('location'), '/?login=failed');
+  assert.equal(db.load().sessions.length, 0);
 });
 
 test('user cancels at PayPal: callback with error=access_denied redirects to login, not 500', async () => {
@@ -185,4 +186,23 @@ test('Secure cookie when APP_URL is https', async () => {
   await boot({ APP_URL: 'https://milestone-pay.example' });
   const r = await post('/auth/test-login', { name: 'Ploy' });
   assert.match(pick(r, 'mp_sid'), /Secure/);
+});
+
+test('cancel and failure keep the screen the user was going to (invite link survives)', async () => {
+  await boot();
+  let { state, oauth } = await startLogin('/#/invite/tok_123');
+  let res = await get(`/auth/paypal/callback?error=access_denied&state=${state}`, oauth);
+  assert.equal(res.headers.get('location'), '/?login=cancelled#/invite/tok_123');
+  ({ state, oauth } = await startLogin('/?judge=1#/p/prj_1'));
+  res = await get(`/auth/paypal/callback?error=access_denied&state=${state}`, oauth);
+  assert.equal(res.headers.get('location'), '/?judge=1&login=cancelled#/p/prj_1');
+});
+
+test('production is assumed when DATABASE_URL and an https APP_URL are set, even without NODE_ENV', () => {
+  const env = { TEST_AUTH: '1', RATE_LIMITS: 'off', DATABASE_URL: 'postgres://x', APP_URL: 'https://a.example', SESSION_SECRET: 's'.repeat(32), PAYPAL_CLIENT_ID: 'a', PAYPAL_CLIENT_SECRET: 'b', GOOGLE_GENERATIVE_AI_API_KEY: 'c' };
+  const c = loadConfig(env);
+  assert.equal(c.prod, true);
+  assert.equal(c.testAuth, false);
+  assert.ok(c.rateLimits);
+  assert.throws(() => loadConfig({ ...env, SESSION_SECRET: '' }), /SESSION_SECRET/);
 });

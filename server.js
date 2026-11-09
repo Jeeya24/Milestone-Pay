@@ -21,12 +21,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
  * (default: exit so Render restarts the process from Postgres).
  */
 export function persistBeforeResponse(onPersistFail) {
+  let broken = false; // after a failed save, memory may hold unsaved state: serve nothing until the restart
   return (_req, res, next) => {
+    if (broken) return res.status(503).json({ error: 'RESTARTING', message: 'The server is restarting. Try again in a moment.' });
     if (db.backend() !== 'pg') return next();
     const end = res.end;
     res.end = function (...args) {
       res.end = end;
       db.flush().then(() => end.apply(res, args), (err) => {
+        broken = true;
         if (res.headersSent) { end.apply(res, args); } else {
           res.statusCode = 500;
           res.removeHeader('Content-Length');
@@ -97,7 +100,6 @@ export function createApp({
       env: 'sandbox',
       test_auth: config.testAuth,
       budget: {
-        today_cost_usd: db.todayCostUsd(),
         limit_usd: db.BUDGET_LIMIT_USD,
         blocked: db.todayCostUsd() >= db.BUDGET_LIMIT_USD,
       },

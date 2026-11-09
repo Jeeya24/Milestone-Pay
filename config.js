@@ -22,7 +22,8 @@ const schema = z.object({
 let warned = false;
 
 export function loadConfig(env = process.env) {
-  const prod = env.NODE_ENV === 'production';
+  // Fail closed: a database plus a public https URL means production even if NODE_ENV was forgotten.
+  const prod = env.NODE_ENV === 'production' || (!!env.DATABASE_URL && /^https:\/\//.test(env.APP_URL || ''));
   const blank = (k) => !env[k] || !String(env[k]).trim();
   const missing = prod ? REQUIRED_IN_PROD.filter(blank) : [];
   if (missing.length) throw new Error(`Missing env: ${missing.join(', ')}`);

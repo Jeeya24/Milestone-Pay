@@ -1054,8 +1054,9 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const d = D();
     const uid = req.user.id;
     const own = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'freelancer').map((m) => m.project_id));
-    if (d.milestones.some((m) => own.has(m.project_id) && VOIDABLE_STATES.includes(m.status))) {
-      throw E('ACTIVE_HOLDS', 'A client has money on hold in one of your projects. Finish or cancel those milestones first.', 409);
+    const paying = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'client').map((m) => m.project_id));
+    if (d.milestones.some((m) => (own.has(m.project_id) || paying.has(m.project_id)) && VOIDABLE_STATES.includes(m.status))) {
+      throw E('ACTIVE_HOLDS', 'Money is on hold in one of your projects. Approve or cancel those milestones first.', 409);
     }
     const ags = new Set(d.agreements.filter((a) => own.has(a.project_id)).map((a) => a.id));
     const ms = new Set(d.milestones.filter((m) => own.has(m.project_id)).map((m) => m.id));
@@ -1089,7 +1090,11 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       notifications: mine(d.notifications),
       agent_runs: mine(d.agent_runs),
       change_requests: mine(d.change_requests),
-      ai_cost: { calls: d.ai_runs.length, cost_usd: d.ai_runs.reduce((s, x) => s + (x.cost_usd || 0), 0) },
+      ai_cost: (() => {
+        const who = new Set(membersOf(p.id).map((m) => m.user_id));
+        const runs = d.ai_runs.filter((x) => who.has(x.user_id));
+        return { calls: runs.length, cost_usd: runs.reduce((s, x) => s + (x.cost_usd || 0), 0) };
+      })(),
       my_role: req.role,
       members: membersOf(p.id).map((m) => ({ role: m.role, name: names.get(m.user_id) ?? null })),
     });

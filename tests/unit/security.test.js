@@ -142,11 +142,10 @@ test('DELETE /api/me: refused while a hold is active, otherwise removes projects
   assert.equal(u.email, null);
   assert.equal((await S.call('GET', '/api/me')).status, 401);
 
-  // the client leaving removes only their membership
+  // the client cannot leave either while their payment is on hold (it would strand the hold)
   const cdel = await C.call('DELETE', '/api/me');
-  assert.equal(cdel.status, 200);
+  assert.equal(cdel.status, 409);
   assert.equal(db.load().projects.some((p) => p.id === pid), true);
-  assert.equal(db.load().project_members.some((m) => m.user_id === C.user.id), false);
 });
 
 test('createApp with a production config refuses test-login', async () => {
@@ -169,4 +168,39 @@ test('index.html carries a per-request CSP nonce that the PayPal SDK can use', a
   assert.ok(!html.includes('{{CSP_NONCE}}'));
   const two = await (await fetch(app.base + '/index.html')).text();
   assert.notEqual(/content="([^"]+)">/.exec(two.match(/<meta name="csp-nonce"[^>]*>/)[0])[1], meta);
+});
+
+test('DELETE /api/me refused while the user is the client on a milestone with money on hold', async () => {
+  await boot();
+  const F = await login(app.call, 'Ploy');
+  const C = await login(app.call, 'Nok');
+  const { pid, agreement, milestones } = await makeProject(F.call);
+  db.load().project_members.push({ project_id: pid, user_id: C.user.id, role: 'client', at: 'x' }); db.save();
+  for (const g of agreement.body.gaps) await F.call('POST', `/api/agreements/${agreement.id}/gaps/${g.id}/fix`);
+  const fa = await F.call('POST', `/api/agreements/${agreement.id}/approve`);
+  await C.call('POST', `/api/agreements/${agreement.id}/approve`, { content_hash: fa.body.agreement.content_hash });
+  const o = await C.call('POST', `/api/milestones/${milestones[0].id}/order`);
+  await C.call('POST', `/api/milestones/${milestones[0].id}/authorize`, { order_id: o.body.order_id });
+  const r = await C.call('DELETE', '/api/me');
+  assert.equal(r.status, 409);
+  assert.equal(r.body.error, 'ACTIVE_HOLDS');
+  assert.ok(db.load().project_members.some((m) => m.user_id === C.user.id));
+});
+
+test('public /api/config exposes no platform-wide AI spend', async () => {
+  await boot();
+  const r = await app.call('GET', '/api/config');
+  assert.equal(r.body.budget?.today_cost_usd, undefined);
+  assert.equal(typeof r.body.budget.blocked, 'boolean');
+});
+
+test('project ai_cost counts only runs by the project\'s members', async () => {
+  await boot();
+  const F = await login(app.call, 'Ploy');
+  const { pid } = await makeProject(F.call);
+  runWithUser(F.user.id, () => db.logAiRun({ task: 'extract', model: 'm', cost_usd: 0.01 }));
+  runWithUser('usr_other', () => db.logAiRun({ task: 'extract', model: 'm', cost_usd: 0.5 }));
+  const v = await F.call('GET', `/api/projects/${pid}`);
+  assert.equal(v.body.ai_cost.calls, 1);
+  assert.equal(v.body.ai_cost.cost_usd, 0.01);
 });

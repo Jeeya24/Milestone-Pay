@@ -111,6 +111,11 @@ test('pg store', opts, async (t) => {
       assert.equal(res.status, 500);
       assert.equal(body.error, 'PERSIST_FAILED');
       assert.equal(exited, 1);
+      pgstore.flush = real;
+      // until the restart, nobody reads the unsaved in-memory state
+      const after = await fetch(base + '/api/me', { headers: { cookie } });
+      assert.equal(after.status, 503);
+      assert.equal((await after.json()).error, 'RESTARTING');
     } finally {
       pgstore.flush = real;
       await new Promise((r) => server.close(r));
