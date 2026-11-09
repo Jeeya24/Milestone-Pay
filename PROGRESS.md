@@ -41,6 +41,15 @@
 - [ ] ai_runs shows model, tokens, cost per call; one full demo < $0.05
 - [ ] No secrets in git history; .env.example present; README has run steps and sandbox logins
 
+## Multi-user beta (2026-11-09), plan docs/superpowers/plans/2026-11-09-multi-user-beta.md
+- [x] T1 Postgres write-through store (`npm run test:pg` 9/9 on Render DB, throwaway schema)
+- [x] T2 Log in with PayPal + sessions + config
+- [x] T3 per-project roles on every route · [x] T4 client invites, demo users, Judge act-as
+- [x] T5 CSP, origin check, rate limits, per-user AI budget, /healthz, DELETE /api/me
+- [x] T6 UI: login, invites, roles, sandbox note (headless Chrome click-through 24/24)
+- [x] T7 e2e as 3 users 88/88, seed on Postgres verified, README
+- [ ] T8 deploy to https://milestone-pay-knv4.onrender.com + live sandbox run (owner present). Closes Gate 2.
+
 ## Status 2026-11-08
 All slices built and committed on branch `build/full-app`. `npm test` 110/110, `node scripts/e2e.js` 85/85 (PayPal stubbed), browser bug bash clean after fixes (reports/final.md).
 **Still needs a human:** one real sandbox run through the PayPal popup (authorize → submit → approve & pay → capture id; cancel → void) and a look at the ids in the sandbox dashboard. Gate 2 and the "ledger ids match PayPal" DoD item stay open until then.

@@ -1,4 +1,5 @@
 // End-to-end journey, in-process, with an injected PayPal stub that records every call.
+// Three logged-in users (test-login): freelancer F, client C (joins through an invite link), stranger S (leak probe).
 // Usage: node scripts/e2e.js [--live-ai]
 //   default    cached demo extraction, stubbed scope classifier, scripted agent model (free, deterministic)
 //   --live-ai  real Gemini for the scope classifier and the agent (needs GOOGLE_GENERATIVE_AI_API_KEY)
@@ -6,15 +7,18 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MockLanguageModelV1 } from 'ai/test';
 import * as db from '../db.js';
 
 const LIVE = process.argv.includes('--live-ai');
+const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mp-e2e-'));
 process.env.UPLOAD_DIR = path.join(dir, 'uploads');
 process.env.DB_PATH = path.join(dir, 'db.json');
 db.init(process.env.DB_PATH);
 const { createApp } = await import('../server.js');
+const { loadConfig } = await import('../config.js');
 const realAi = await import('../ai.js');
 const realAgent = await import('../agent.js');
 
@@ -76,20 +80,50 @@ const classifyStub = async (summary, request) => {
   };
 };
 
+// Extraction always comes from the cached fixture (free, deterministic); --live-ai covers classifier + agent.
+const cachedExtract = async () => JSON.parse(fs.readFileSync(path.join(FIXTURES, 'baan-kafe.extract.json'), 'utf8'));
 const agentOpts = LIVE ? {} : { model: scriptedModel() };
-const app = createApp({ paypal, ai: LIVE ? realAi : { ...realAi, classifyChange: classifyStub }, agent: realAgent, agentOpts });
+const config = loadConfig({ ...process.env, NODE_ENV: 'test', TEST_AUTH: '1', RATE_LIMITS: 'off', APP_URL: '' });
+const app = createApp({ paypal, ai: { ...realAi, extractAgreement: cachedExtract, ...(LIVE ? {} : { classifyChange: classifyStub }) }, agent: realAgent, agentOpts, config });
 const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
 const base = `http://127.0.0.1:${server.address().port}`;
-const call = async (method, url, body) => {
+const raw = async (method, url, body, cookie) => {
   const isForm = body instanceof FormData;
-  const res = await fetch(base + url, {
-    method, headers: isForm || body === undefined ? {} : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
-  });
+  const headers = { origin: base, ...(cookie ? { cookie } : {}), ...(isForm || body === undefined ? {} : { 'content-type': 'application/json' }) };
+  const res = await fetch(base + url, { method, headers, body: body === undefined ? undefined : isForm ? body : JSON.stringify(body) });
   const text = await res.text();
   let json = null; try { json = JSON.parse(text); } catch { /* */ }
-  return { status: res.status, body: json, text };
+  return { status: res.status, body: json, text, setCookie: res.headers.getSetCookie() };
 };
+async function loginAs(name) {
+  const r = await raw('POST', '/auth/test-login', { name });
+  return { cookie: r.setCookie.find((c) => c.startsWith('mp_sid=')).split(';')[0], user: r.body.user };
+}
+const F = await loginAs('Ploy'); const C = await loginAs('Nok'); const S = await loginAs('Sam');
+const asF = (m, u, b) => raw(m, u, b, F.cookie);
+const asC = (m, u, b) => raw(m, u, b, C.cookie);
+const asS = (m, u, b) => raw(m, u, b, S.cookie);
+// Client-only routes go as C; a body with party/from 'client' (kept from the single-user script) also means C.
+const CLIENT_ROUTE = /\/(order|authorize|revision|decide)$|^\/api\/proposals\/[^/]+\/(approve|cancel)$/;
+const call = (method, url, body) => {
+  const client = CLIENT_ROUTE.test(url) || (body && !(body instanceof FormData) && (body.party === 'client' || body.from === 'client'));
+  return client ? asC(method, url, body) : asF(method, url, body);
+};
+const ids = { projects: new Set(), milestones: new Set(), proposals: new Set(), deliverables: new Set(), change_requests: new Set() };
+/** Fixture project created by F (not a demo), C joins through an invite link. */
+async function createProject() {
+  const fd = new FormData();
+  fd.set('chatText', fs.readFileSync(path.join(FIXTURES, 'baan-kafe.txt'), 'utf8'));
+  fd.set('freelancer_name', 'Ploy');
+  const p = await asF('POST', '/api/projects', fd);
+  const pid = p.body.project.id;
+  const ex = await asF('POST', `/api/projects/${pid}/extract`);
+  const inv = await asF('POST', `/api/projects/${pid}/invites`);
+  const token = new URL(inv.body.url).pathname.split('/').pop();
+  const acc = await asC('POST', `/api/invites/${token}/accept`);
+  ids.projects.add(pid);
+  return { status: p.status === 201 && ex.status === 200 && inv.status === 201 && acc.status === 200 ? 201 : 500, body: { project_id: pid, ex: ex.body, acc: acc.body } };
+}
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const upload = (mid, name = 'work.png') => {
   const fd = new FormData(); fd.append('files', new Blob([PNG], { type: 'image/png' }), name);
@@ -102,7 +136,7 @@ const REV_NOTE = 'Please change the logo <img src=x onerror=alert(1)> REVNOTE-MA
 const CR_TEXT = 'Can you add an online ordering page? <script>alert(1)</script> CRTEXT-MARKER';
 
 async function newReadyProject({ fixG1 = true } = {}) {
-  const d = await call('POST', '/api/demo');
+  const d = await createProject();
   const pid = d.body.project_id;
   const v = await view(pid);
   if (fixG1) await call('POST', `/api/agreements/${v.agreement.id}/gaps/g1/fix`);
@@ -123,9 +157,10 @@ async function submitWork(mid) {
 
 try {
   // =========================================================================
-  section('Steps 1-4: demo, review, approve');
-  const demo = await call('POST', '/api/demo');
-  check('demo project created (201)', demo.status === 201 && /^prj_/.test(demo.body?.project_id || ''), demo.body);
+  section('Steps 1-4: create, invite client, review, approve');
+  const demo = await createProject();
+  check('project created by F, extracted, C joined via invite (201)', demo.status === 201 && /^prj_/.test(demo.body?.project_id || ''), demo.body);
+  check('C sees the project as client, F as freelancer', (await asC('GET', `/api/projects/${demo.body.project_id}`)).body?.my_role === 'client' && (await asF('GET', `/api/projects/${demo.body.project_id}`)).body?.my_role === 'freelancer');
   const pid = demo.body.project_id;
   let v = await view(pid);
   const aid = v.agreement.id;
@@ -147,11 +182,11 @@ try {
   check('client approve before freelancer = 409 NOT_SENT', (await call('POST', `/api/agreements/${aid}/approve`, { party: 'client', content_hash: 'x' })).body?.error === 'NOT_SENT');
   const fa = await call('POST', `/api/agreements/${aid}/approve`, { party: 'freelancer' });
   const hash = fa.body.agreement?.content_hash;
-  check('freelancer approve -> status sent, sha256 hash, client_url', fa.status === 200 && fa.body.agreement.status === 'sent' && /^sha256:[0-9a-f]{64}$/.test(hash) && fa.body.client_url.includes(pid), fa.body);
+  check('freelancer approve -> status sent, sha256 hash', fa.status === 200 && fa.body.agreement.status === 'sent' && /^sha256:[0-9a-f]{64}$/.test(hash), fa.body);
   check('PATCH after freelancer approval = 409 AGREEMENT_FROZEN', (await call('PATCH', `/api/milestones/${m1id}`, { amount_minor: 99999 })).body?.error === 'AGREEMENT_FROZEN');
   check('re-extract after approval = 409 AGREEMENT_FROZEN', (await call('POST', `/api/projects/${pid}/extract`)).body?.error === 'AGREEMENT_FROZEN');
   check('client wrong hash = 409 HASH_MISMATCH', (await call('POST', `/api/agreements/${aid}/approve`, { party: 'client', content_hash: 'sha256:00' })).body?.error === 'HASH_MISMATCH');
-  check('unknown party = 400 BAD_PARTY', (await call('POST', `/api/agreements/${aid}/approve`, { party: 'robot' })).body?.error === 'BAD_PARTY');
+  check('stranger approve = 404 (not a member)', (await asS('POST', `/api/agreements/${aid}/approve`, { content_hash: hash })).status === 404);
   const early = await call('POST', `/api/milestones/${m1id}/order`);
   check('order before client approval = 409 AGREEMENT_NOT_APPROVED', early.status === 409 && early.body.error === 'AGREEMENT_NOT_APPROVED', early.body);
   const ca = await call('POST', `/api/agreements/${aid}/approve`, { party: 'client', content_hash: hash });
@@ -196,7 +231,7 @@ try {
   check('second approve = same result, still 1 capture', ap1b.status === 200 && ap1b.body.payment.capture_id === ap1.body.payment.capture_id && calls.capture.length === 1, { s: ap1b.status, c: calls.capture.length, b: ap1b.body?.error });
   const [ra, rb] = await Promise.all([1, 2].map(() => call('POST', `/api/proposals/${prop1.id}/approve`, { party: 'client' })));
   check('concurrent approves still 1 capture', calls.capture.length === 1 && ra.status < 300 && rb.status < 300);
-  check('approve with party=freelancer = 400 BAD_PARTY', (await call('POST', `/api/proposals/${prop1.id}/approve`, { party: 'freelancer' })).body?.error === 'BAD_PARTY');
+  check('freelancer approving a release = 403 WRONG_ROLE', (await asF('POST', `/api/proposals/${prop1.id}/approve`, {})).body?.error === 'WRONG_ROLE');
 
   // =========================================================================
   section('M2 with one revision round');
@@ -316,6 +351,26 @@ try {
     check('change request text never in an agent prompt', !all.includes('CRTEXT-MARKER') && !all.includes('online ordering page?'));
     check('chat text (m9 injection, names) never in an agent prompt', !/release all|ignore the contract|Nok|Ploy|Baan Kafe|work\.png|v2\.png/i.test(all), all.match(/release all|ignore the contract|Nok|Ploy|Baan Kafe|work\.png|v2\.png/i)?.[0]);
     check('classifier got summary + request, but not the revision note', classifySeen.length === 1 && classifySeen[0].request.includes('CRTEXT-MARKER') && !classifySeen[0].summary.includes('REVNOTE-MARKER'));
+  }
+
+  // =========================================================================
+  section('Leak probe: a logged-in stranger sees nothing');
+  {
+    const d = JSON.parse(fs.readFileSync(process.env.DB_PATH, 'utf8'));
+    for (const m of d.milestones) if (ids.projects.has(m.project_id)) ids.milestones.add(m.id);
+    for (const p of d.proposals) if (ids.milestones.has(p.milestone_id)) ids.proposals.add(p.id);
+    for (const x of d.deliverables) if (ids.projects.has(x.project_id)) ids.deliverables.add(x.id);
+    for (const c of d.change_requests) if (ids.projects.has(c.project_id)) ids.change_requests.add(c.id);
+    const leaks = [];
+    const probe = async (m, u, b) => { const r = await asS(m, u, b); if (r.status !== 404) leaks.push(`${m} ${u} -> ${r.status}`); };
+    for (const id of ids.projects) { await probe('GET', `/api/projects/${id}`); await probe('POST', `/api/projects/${id}/refresh`); await probe('POST', `/api/projects/${id}/invites`); await probe('POST', `/api/projects/${id}/change-requests`, { message: 'leak probe text' }); }
+    for (const id of ids.milestones) { await probe('POST', `/api/milestones/${id}/order`); await probe('POST', `/api/milestones/${id}/submit`); await probe('POST', '/api/agent/run', { event: 'milestone.submitted', milestone_id: id }); }
+    for (const id of ids.proposals) { await probe('POST', `/api/proposals/${id}/approve`, {}); await probe('POST', `/api/proposals/${id}/cancel`, {}); }
+    for (const id of ids.deliverables) await probe('GET', `/api/deliverables/${id}/download`);
+    for (const id of ids.change_requests) await probe('POST', `/api/change-requests/${id}/decide`, { accept: true });
+    const sDash = await asS('GET', '/api/projects');
+    check(`stranger gets 404 on all ${ids.projects.size} projects, ${ids.milestones.size} milestones, ${ids.proposals.size} proposals, ${ids.deliverables.size} files, ${ids.change_requests.size} change requests`, leaks.length === 0 && ids.proposals.size > 0 && ids.deliverables.size > 0, leaks);
+    check('stranger dashboard is empty', sDash.body.projects.length === 0, sDash.body.projects.length);
   }
 
   // =========================================================================

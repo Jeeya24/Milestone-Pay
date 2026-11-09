@@ -47,7 +47,7 @@ export async function seed({ dbPath, cleanUploads = false } = {}) {
   const sid = issueSessionToken(DEMO_FREELANCER_ID, { userAgent: 'seed' });
 
   // The agent is never reached by these routes, and the cached extraction means no AI call.
-  const app = createApp({ agentOpts: { forceFallback: true }, config: loadConfig({ ...process.env, NODE_ENV: 'seed', TEST_AUTH: '' }) });
+  const app = createApp({ agentOpts: { forceFallback: true }, logSink: () => {}, config: loadConfig({ ...process.env, NODE_ENV: 'seed', TEST_AUTH: '' }) });
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (method, url, body, extra = {}) => {
@@ -91,5 +91,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(`  Freelancer: http://localhost:${port}/#/p/${projectId}`);
     console.log(`  Judge:      http://localhost:${port}/?judge=1&p=${projectId}`);
     if (cleanUploads) console.log('  Uploaded files cleared.');
+    process.exit(0); // the Postgres pool would keep the process alive
   }).catch((e) => { console.error(e.message); process.exit(1); });
 }
