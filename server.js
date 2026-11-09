@@ -91,6 +91,8 @@ export function createApp({
     res.redirect(302, /^[A-Za-z0-9_-]{1,100}$/.test(t) ? `/#/invite/${t}` : '/');
   });
   app.get('/api/me', requireUser, (req, res) => res.json({ user: req.user }));
+  // Public: who is signed in, or null (the app shell asks this on load, so a logged-out visit isn't an error).
+  app.get('/api/session', (req, res) => res.json({ user: req.user ?? null }));
 
   app.get('/api/config', (_req, res) => {
     res.json({

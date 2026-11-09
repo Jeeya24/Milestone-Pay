@@ -100,6 +100,14 @@ test('download-all zips the current version and is members-only', async () => {
   assert.equal((await S.call('GET', `/api/milestones/${m.id}/download-all`)).status, 404);
 });
 
+test('GET /api/session is public: null when logged out, the user when logged in', async () => {
+  const anon = await app.call('GET', '/api/session');
+  assert.equal(anon.status, 200);
+  assert.equal(anon.body.user, null);
+  const me = await F.call('GET', '/api/session');
+  assert.equal(me.body.user.name, 'Ploy');
+});
+
 test('project list carries deadline, held/paid and client totals', async () => {
   const { pid } = await makeProject(F.call);
   const l = await F.call('GET', '/api/projects');

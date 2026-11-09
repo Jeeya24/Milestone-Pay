@@ -4,33 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csp-nonce" content="{{CSP_NONCE}}">
+<meta name="theme-color" content="#F5F1EA">
 <title>Milestone Pay</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="ds/tokens.css">
+<link rel="stylesheet" href="ds/bundle.css">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header>
-  <span class="logo">Milestone Pay<small>sandbox</small></span>
-  <span class="side" id="side">Freelancer</span>
-  <span class="spacer"></span>
-  <a href="#/" id="homeLink">All projects</a>
-</header>
-<div id="stage">
-  <section id="deskPane">
-    <div class="frame-label deskLabel">Freelancer · desktop</div>
-    <main id="app"><div class="loading"><span class="spin"></span>Loading…</div></main>
-  </section>
-  <aside id="phonePane" aria-label="Client phone view">
-    <div class="frame-label phoneLabel">Client · phone (link, no signup)</div>
-    <div class="phone"><div class="notch"></div>
-      <iframe id="phoneFrame" title="Client phone view" hidden></iframe>
-      <div id="phoneEmpty" class="empty">Open a project to see what the client sees, live.</div>
-    </div>
-  </aside>
-</div>
-<footer>Sandbox · fake money · PayPal holds the funds, not us</footer>
-<div id="toast"></div>
-<div id="modal"><div class="m" id="modalBody"></div></div>
-<script src="app.js"></script>
+<div id="app"><div class="mp-auth"><main class="mp-auth__main"><div class="mp-row mp-t-sm mp-muted" role="status"><span class="mp-spinner"></span>Loading…</div></main></div></div>
+<div id="toasts" class="mp-toasts" aria-live="polite"></div>
+<script src="ds/icons.js"></script>
+<script type="module" src="js/main.js"></script>
 </body>
 </html>

@@ -211,3 +211,16 @@ withFallback(task, fn): Promise<any>                            // in models.js 
 runAgent(event, milestoneId, {forceFallback?}): Promise<AgentRun>
 tools: { get_order, propose_release, capture_authorization, void_authorization, notify }
 ```
+
+## Design-system journey (2026-11-09)
+The frontend follows the Milestone Pay design system (boards O1–O5 onboarding, 01–10 app). PayPal is the only sign-in; every client has an account.
+
+- `GET /api/session` → `200 { user|null }`. Public. The app shell asks it on load (no 401 for a logged-out visit).
+- `GET /api/me` / `PATCH /api/me` → `{ user }`. The user now carries the profile: `display_name, roles[], active_role, skills[], bio, client_type, hire_for[], onboarded`.
+  PATCH body (strict, zod): `{ role?, add_role?, display_name? (1–60), skills? (≤12), bio? (≤160), client_type? ("individual"|"business"), hire_for? (≤12), finish? }`.
+  `finish:true` sets `onboarded`; needs a role (`ROLE_REQUIRED`), a name, and for freelancers one skill (`SKILL_REQUIRED`). Bad input → `400 BAD_PROFILE`.
+  Roles here only pick the home screen (Your projects / Your jobs); who may act on a project is still `project_members`.
+- `GET /api/invite-preview/:token` → `200 { project:{id,title}, freelancer:{name}, total_minor, currency, parts }`. Public: the agreement link’s sign-in screen. Same errors as the invite (`404`, `409 INVITE_USED`, `410 INVITE_EXPIRED`). `GET /api/invites/:token` returns the same extra fields.
+- `POST /api/agreements/:id/notes` `{ text }` (2–500 chars) → `201 { note:{id,from,text,at}, notes }`. Either member, only while the agreement is `sent` (`409 NOT_SENT`). Untrusted text: never sent to the agent or a model. `GET /api/projects/:id` returns `notes`.
+- `GET /api/milestones/:id/download-all` → the current version’s files as one zip (members only; `404` when there are none).
+- `GET /api/projects` rows add `currency, deadline, agreement_status, held_minor, paid_minor, paid_count, current:{id,label,title,status,amount_minor,fundable}|null, updated_at`; names come from display names. The response adds `client_totals:{held_minor, paid_minor}` for projects where the user is the client.

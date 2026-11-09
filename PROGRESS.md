@@ -50,6 +50,11 @@
 - [x] T7 e2e as 3 users 88/88, seed on Postgres verified, README
 - [ ] T8 deploy to https://milestone-pay-knv4.onrender.com + live sandbox run (owner present). Closes Gate 2.
 
+## Design-system frontend (2026-11-09)
+- [x] Backend: profile/onboarding (`PATCH /api/me`), `/api/session`, invite preview, agreement notes, zip download, richer dashboard rows, CSP for Geist (`npm test` 172/172)
+- [x] Frontend rebuilt on the design system (`public/ds/` tokens, components, icons): O1 welcome → O2 Continue with PayPal → O3 role → O4a/O4b setup → O5 all set; 01 projects, 01b Your jobs, 02 paste chat, 03 review + lock + link + notes, 04 approve, 05 payments/fund, 06 submit, 07 review & pay + activity, 08 change requests, 09 project page, 10 settings + logout; phone layout by media query
+- [x] `tests/qa/journey-ui.cjs`: freelancer desktop + client phone, invite → approve → fund → deliver → pay → change order → logout, 13/13, no console errors. `node scripts/e2e.js` 88/88.
+
 ## Status 2026-11-08
 All slices built and committed on branch `build/full-app`. `npm test` 110/110, `node scripts/e2e.js` 85/85 (PayPal stubbed), browser bug bash clean after fixes (reports/final.md).
 **Still needs a human:** one real sandbox run through the PayPal popup (authorize → submit → approve & pay → capture id; cancel → void) and a look at the ids in the sandbox dashboard. Gate 2 and the "ledger ids match PayPal" DoD item stay open until then.
