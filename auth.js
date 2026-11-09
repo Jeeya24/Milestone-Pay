@@ -87,7 +87,19 @@ export function safeNext(next) {
 // ---------------------------------------------------------------------------
 // Sessions
 
-const userView = (u) => ({ id: u.id, name: u.name || null, email: u.email || null });
+/** The signed-in user plus their profile (onboarding answers). Profile fields are user-supplied: escape on render. */
+export const userView = (u) => ({
+  id: u.id, name: u.name || null, email: u.email || null,
+  display_name: u.display_name || null,
+  roles: Array.isArray(u.roles) ? u.roles : [],
+  active_role: u.active_role || null,
+  skills: Array.isArray(u.skills) ? u.skills : [],
+  bio: u.bio || null,
+  client_type: u.client_type || null,
+  hire_for: Array.isArray(u.hire_for) ? u.hire_for : [],
+  onboarded: !!u.onboarded_at,
+  created_at: u.created_at || null,
+});
 
 /** Store a new session (hashed) and return its raw token. Also used by seed.js for its in-process calls. */
 export function issueSessionToken(userId, { ip = null, userAgent = '' } = {}) {

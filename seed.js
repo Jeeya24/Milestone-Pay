@@ -41,7 +41,7 @@ export async function seed({ dbPath, cleanUploads = false } = {}) {
   }
   const d = db.load();
   if (!d.users.some((u) => u.id === DEMO_FREELANCER_ID)) {
-    d.users.push({ id: DEMO_FREELANCER_ID, paypal_user_id: null, email: null, name: 'Ploy (demo)', created_at: new Date().toISOString(), last_login_at: null });
+    d.users.push({ id: DEMO_FREELANCER_ID, paypal_user_id: null, email: null, name: 'Ploy (demo)', display_name: 'Ploy Design', roles: ['freelancer'], active_role: 'freelancer', skills: ['Web design'], onboarded_at: new Date().toISOString(), created_at: new Date().toISOString(), last_login_at: null });
     db.save();
   }
   const sid = issueSessionToken(DEMO_FREELANCER_ID, { userAgent: 'seed' });

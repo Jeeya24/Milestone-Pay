@@ -7,8 +7,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ZipArchive } from 'archiver';
+import { z } from 'zod';
 import * as db from './db.js';
 import { need, membersOf, roleOf, memberWithRole } from './access.js';
+import { userView } from './auth.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, 'fixtures');
@@ -221,6 +224,38 @@ function projectView(p) {
 }
 
 const VOIDABLE_STATES = ['authorized', 'submitted', 'revision_requested'];
+const termOf = (a, key) => a?.body?.terms?.find((t) => t.key === key)?.value ?? null;
+/** Name shown to the other party: the profile's display name, else the PayPal name. */
+const displayName = (u) => (u ? u.display_name || u.name || null : null);
+const memberName = (projectId, role) => displayName(D().users.find((u) => u.id === memberWithRole(projectId, role)?.user_id));
+
+/** What the agreement link shows before sign-in: who sent it and the total. Throws like usableInvite. */
+export function invitePreview(token) {
+  const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
+  const i = typeof token === 'string' && token ? D().invites.find((x) => x.token_hash === sha(token)) : null;
+  const p = i && D().projects.find((x) => x.id === i.project_id);
+  if (!p) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
+  if (i.used_by || i.revoked) throw E('INVITE_USED', 'This invite link was already used. Ask the freelancer for a new one.', 409);
+  if (Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
+  const a = agreementOf(p.id);
+  const ms = milestonesOf(p.id);
+  return {
+    project: { id: p.id, title: a?.body?.title ?? p.title ?? null },
+    freelancer: { name: memberName(p.id, 'freelancer') ?? p.freelancer_name ?? null },
+    total_minor: ms.reduce((t, m) => t + m.amount_minor, 0), currency: a?.body?.currency ?? ms[0]?.currency ?? null, parts: ms.length,
+  };
+}
+
+const ProfileBody = z.object({
+  role: z.enum(['freelancer', 'client']).optional(),
+  add_role: z.enum(['freelancer', 'client']).optional(),
+  display_name: z.string().trim().min(1).max(60).optional(),
+  skills: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+  bio: z.string().trim().max(160).optional(),
+  client_type: z.enum(['individual', 'business']).optional(),
+  hire_for: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
+  finish: z.boolean().optional(),
+}).strict();
 const lastPaymentOf = (mid) => [...D().payments].reverse().find((p) => p.milestone_id === mid) ?? null;
 const money = (minor, cur) => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(minor / 100);
 
@@ -337,14 +372,34 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         const ms = milestonesOf(p.id);
         const cr = d.change_requests.find((c) => c.project_id === p.id && (c.status === 'open' || c.status === 'sent'));
         const v = projectView(p);
+        const a = agreementOf(p.id);
+        const cur = ms.find((m) => m.status !== 'paid');
+        const last = d.activity.filter((x) => x.project_id === p.id).at(-1);
         return {
-          id: p.id, my_role: myRole.get(p.id), is_demo: v.is_demo, title: v.title, freelancer: v.freelancer, client: v.client,
+          id: p.id, my_role: myRole.get(p.id), is_demo: v.is_demo, title: v.title,
+          freelancer: memberName(p.id, 'freelancer') ?? v.freelancer, client: memberName(p.id, 'client') ?? v.client,
           total_minor: ms.reduce((s, m) => s + m.amount_minor, 0), status: v.status,
-          milestones: ms.map((m) => ({ id: m.id, label: m.label, status: m.status })),
+          currency: a?.body?.currency ?? ms[0]?.currency ?? null, deadline: termOf(a, 'deadline'),
+          agreement_status: a?.status ?? null,
+          held_minor: ms.filter((m) => VOIDABLE_STATES.includes(m.status)).reduce((s, m) => s + m.amount_minor, 0),
+          paid_minor: ms.filter((m) => m.status === 'paid').reduce((s, m) => s + m.amount_minor, 0),
+          paid_count: ms.filter((m) => m.status === 'paid').length,
+          current: cur ? { id: cur.id, label: cur.label, title: cur.title, status: cur.status, amount_minor: cur.amount_minor,
+            fundable: cur.status === 'agreed' && a?.status === 'approved' } : null,
+          milestones: ms.map((m) => ({ id: m.id, label: m.label, title: m.title, status: m.status, amount_minor: m.amount_minor })),
           open_change_request: cr ? { id: cr.id, from: cr.from, status: cr.status } : null,
+          updated_at: last?.at ?? p.created_at ?? null,
         };
       }).reverse(),
       totals: { held_minor: held, paid_minor: paid, not_funded_minor: notFunded },
+      client_totals: (() => {
+        const mine = new Set(projects.filter((p) => myRole.get(p.id) === 'client').map((p) => p.id));
+        const cms = d.milestones.filter((m) => mine.has(m.project_id));
+        return {
+          held_minor: cms.filter((m) => VOIDABLE_STATES.includes(m.status)).reduce((s, m) => s + m.amount_minor, 0),
+          paid_minor: cms.filter((m) => m.status === 'paid').reduce((s, m) => s + m.amount_minor, 0),
+        };
+      })(),
     });
   });
 
@@ -553,7 +608,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     // The demo client is a placeholder user that can never log in; Judge mode acts as it (X-Act-As: client).
     let demoClient = d.users.find((u) => u.id === DEMO_CLIENT_ID);
     if (!demoClient) {
-      demoClient = { id: DEMO_CLIENT_ID, paypal_user_id: null, email: null, name: 'Nok (demo)', created_at: now(), last_login_at: null };
+      demoClient = { id: DEMO_CLIENT_ID, paypal_user_id: null, email: null, name: 'Nok (demo)', display_name: 'Nok', roles: ['client'], active_role: 'client', client_type: 'business', onboarded_at: now(), created_at: now(), last_login_at: null };
       d.users.push(demoClient);
     }
     d.project_members.push({ project_id: project.id, user_id: req.user.id, role: 'freelancer', at: now() });
@@ -1030,8 +1085,11 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const i = usableInvite(req.params.token, req.user);
     const p = D().projects.find((x) => x.id === i.project_id);
     const f = memberWithRole(p.id, 'freelancer');
-    const fname = D().users.find((u) => u.id === f?.user_id)?.name ?? p.freelancer_name ?? null;
-    res.json({ project: { id: p.id, title: p.title ?? null }, freelancer: { name: fname } });
+    const fname = displayName(D().users.find((u) => u.id === f?.user_id)) ?? p.freelancer_name ?? null;
+    const a = agreementOf(p.id);
+    const ms = milestonesOf(p.id);
+    res.json({ project: { id: p.id, title: a?.body?.title ?? p.title ?? null }, freelancer: { name: fname },
+      total_minor: ms.reduce((t, m) => t + m.amount_minor, 0), currency: a?.body?.currency ?? ms[0]?.currency ?? null, parts: ms.length });
   });
 
   r.post('/invites/:token/accept', (req, res) => {
@@ -1045,6 +1103,80 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     db.save();
     db.activity(i.project_id, 'client', `${req.user.name || 'The client'} joined the project`);
     res.json({ project_id: i.project_id });
+  });
+
+  // ---- Profile and onboarding ----------------------------------------------
+  // One PayPal sign-in, then one role choice and one setup step. Roles here are the user's home view
+  // (Your projects / Your jobs); who may act on a project is still decided per project by project_members.
+  r.patch('/me', (req, res) => {
+    const parsed = ProfileBody.safeParse(req.body || {});
+    if (!parsed.success) {
+      const f = parsed.error.issues[0]?.path?.[0];
+      const msg = f === 'display_name' ? 'Add the name people will see (up to 60 characters).'
+        : f === 'bio' ? 'Keep the bio to 160 characters.' : 'Some of these details are not valid.';
+      throw E('BAD_PROFILE', msg);
+    }
+    const b = parsed.data;
+    const u = D().users.find((x) => x.id === req.user.id);
+    const roles = new Set(Array.isArray(u.roles) ? u.roles : []);
+    if (b.role) { roles.add(b.role); u.active_role = b.role; }
+    if (b.add_role) { roles.add(b.add_role); u.active_role = b.add_role; }
+    u.roles = [...roles];
+    for (const k of ['display_name', 'bio', 'client_type']) if (b[k] !== undefined) u[k] = b[k] || null;
+    for (const k of ['skills', 'hire_for']) if (b[k] !== undefined) u[k] = [...new Set(b[k])];
+    if (b.finish) {
+      if (!u.active_role) throw E('ROLE_REQUIRED', 'Choose how you will use Milestone Pay first.');
+      if (!(u.display_name || u.name)) throw E('BAD_PROFILE', 'Add the name people will see.');
+      if (u.active_role === 'freelancer' && !(u.skills || []).length) throw E('SKILL_REQUIRED', 'Pick at least one skill so clients know what you do.');
+      u.onboarded_at ||= now();
+    }
+    db.save();
+    res.json({ user: userView(u) });
+  });
+
+  // ---- Notes on a sent agreement (before the client approves) -------------
+  // Untrusted text between the two people. Never sent to the agent or any model.
+  r.post('/agreements/:id/notes', need('agreement'), (req, res) => {
+    const a = getAgreement(req.params.id);
+    const text = (typeof req.body?.text === 'string' ? req.body.text : '').trim().slice(0, 500);
+    if (text.length < 2) throw E('NOTE_TOO_SHORT', 'Write a short note first.');
+    if (a.status !== 'sent') throw E('NOT_SENT', 'Notes are for an agreement waiting for the client\'s approval.', 409);
+    const note = { id: db.id('note'), from: req.role, text, at: now() };
+    (a.notes ||= []).push(note);
+    db.save();
+    const p = D().projects.find((x) => x.id === a.project_id);
+    if (req.role === 'client') {
+      db.activity(a.project_id, 'client', `${p.client || 'The client'} sent a note about the agreement`);
+      db.notify(a.project_id, 'freelancer', `${p.client || 'Your client'} sent a note about the agreement. Reply on the agreement page.`);
+    } else {
+      db.activity(a.project_id, 'free', `${p.freelancer || 'The freelancer'} replied to the client's note`);
+      db.notify(a.project_id, 'client', `${p.freelancer || 'The freelancer'} replied to your note.`);
+    }
+    res.status(201).json({ note, notes: a.notes });
+  });
+
+  // ---- Download all files of a milestone's current version as one zip ----
+  r.get('/milestones/:id/download-all', need('milestone'), (req, res) => {
+    const m = getMilestone(req.params.id);
+    const version = m.rev_count + 1;
+    const root = path.resolve(uploadsRoot());
+    const rows = D().deliverables.filter((x) => x.milestone_id === m.id && x.version === version && x.path)
+      .map((x) => ({ x, file: path.resolve(root, x.path) }))
+      .filter(({ file }) => file.startsWith(root + path.sep) && fs.existsSync(file));
+    if (!rows.length) throw E('NOT_FOUND', 'No files to download yet.', 404);
+    const name = `${m.label}-files-v${version}.zip`;
+    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${name}"`, 'X-Content-Type-Options': 'nosniff' });
+    const zip = new ZipArchive({ zlib: { level: 6 } });
+    zip.on('error', () => res.destroy());
+    zip.pipe(res);
+    const seen = new Set();
+    for (const { x, file } of rows) {
+      let n = x.filename.replace(/[\\/]/g, '_'); let k = 1;
+      while (seen.has(n)) n = `${k++}-${x.filename}`;
+      seen.add(n);
+      zip.file(file, { name: n });
+    }
+    zip.finalize();
   });
 
   // ---- Account deletion (beta courtesy) ------------------------------------
@@ -1076,13 +1208,14 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   r.get('/projects/:id', need('project'), (req, res) => {
     const p = getProject(req.params.id);
     const d = D();
-    const names = new Map(d.users.map((u) => [u.id, u.name]));
+    const names = new Map(d.users.map((u) => [u.id, displayName(u)]));
     const a = agreementOf(p.id);
     const mine = (rows) => rows.filter((x) => x.project_id === p.id);
     res.json({
       project: { ...projectView(p), open_change_request: (() => { const c = d.change_requests.find((x) => x.project_id === p.id && (x.status === 'open' || x.status === 'sent')); return c ? { id: c.id, from: c.from, status: c.status } : null; })() },
       agreement: agreementView(a),
       approvals: a ? d.approvals.filter((x) => x.agreement_id === a.id) : [],
+      notes: a?.notes ?? [],
       messages: projectMessages(p.id),
       milestones: milestonesOf(p.id).map(milestoneView),
       ledger: mine(d.ledger).filter((l) => l.event),

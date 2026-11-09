@@ -8,7 +8,7 @@ import { labRouter } from './lab.js';
 import * as realPaypal from './paypal.js';
 import * as realAi from './ai.js';
 import * as realAgent from './agent.js';
-import { createRoutes } from './routes.js';
+import { createRoutes, invitePreview } from './routes.js';
 import { loadConfig } from './config.js';
 import { identity as realIdentity, authRouter, loadSession, requireUser } from './auth.js';
 import { securityHeaders, originCheck, rateLimit, requestLog, clientIp } from './security.js';
@@ -105,6 +105,9 @@ export function createApp({
       },
     });
   });
+
+  // Public: the agreement link's sign-in screen shows who sent it and the total (the token itself is the secret).
+  app.get('/api/invite-preview/:token', (req, res) => res.json(invitePreview(req.params.token)));
 
   app.use('/api', requireUser); // everything below needs a session; /api/config above stays public
   app.get('/api/ai-runs', (req, res) => {
