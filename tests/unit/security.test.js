@@ -204,3 +204,11 @@ test('project ai_cost counts only runs by the project\'s members', async () => {
   assert.equal(v.body.ai_cost.calls, 1);
   assert.equal(v.body.ai_cost.cost_usd, 0.01);
 });
+
+test('rate limits key on the real client IP behind Cloudflare (CF-Connecting-IP), not the proxy hop', async () => {
+  await boot();
+  const hit = (ip) => fetch(app.base + '/auth/paypal/start?next=/', { redirect: 'manual', headers: { 'cf-connecting-ip': ip } });
+  for (let i = 0; i < 20; i++) assert.equal((await hit('203.0.113.7')).status, 302);
+  assert.equal((await hit('203.0.113.7')).status, 429, 'same client is limited');
+  assert.equal((await hit('198.51.100.9')).status, 302, 'another client is not');
+});

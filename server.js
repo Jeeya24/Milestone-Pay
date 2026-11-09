@@ -11,7 +11,7 @@ import * as realAgent from './agent.js';
 import { createRoutes } from './routes.js';
 import { loadConfig } from './config.js';
 import { identity as realIdentity, authRouter, loadSession, requireUser } from './auth.js';
-import { securityHeaders, originCheck, rateLimit, requestLog } from './security.js';
+import { securityHeaders, originCheck, rateLimit, requestLog, clientIp } from './security.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,12 +76,12 @@ export function createApp({
   app.use(loadSession());
   const L = config.rateLimits;
   if (L) {
-    app.use('/auth', rateLimit({ key: (req) => `auth:${req.ip}`, limit: L.auth }));
+    app.use('/auth', rateLimit({ key: (req) => `auth:${clientIp(req)}`, limit: L.auth }));
     app.use('/api', rateLimit({
-      key: (req) => (req.method === 'POST' && AI_ROUTES.some((re) => re.test(req.baseUrl + req.path)) ? `ai:${req.user?.id ?? req.ip}` : null),
+      key: (req) => (req.method === 'POST' && AI_ROUTES.some((re) => re.test(req.baseUrl + req.path)) ? `ai:${req.user?.id ?? clientIp(req)}` : null),
       limit: L.ai,
     }));
-    app.use('/api', rateLimit({ key: (req) => `api:${req.user?.id ?? req.ip}`, limit: L.api }));
+    app.use('/api', rateLimit({ key: (req) => `api:${req.user?.id ?? clientIp(req)}`, limit: L.api }));
   }
 
   app.use('/auth', authRouter({ identity, config }));

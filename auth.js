@@ -102,7 +102,7 @@ export function issueSessionToken(userId, { ip = null, userAgent = '' } = {}) {
 }
 
 export function createSession(req, res, userId, config) {
-  const token = issueSessionToken(userId, { ip: req.ip || null, userAgent: req.get('user-agent') || '' });
+  const token = issueSessionToken(userId, { ip: req.get('cf-connecting-ip') || req.ip || null, userAgent: req.get('user-agent') || '' });
   addCookie(res, cookie('mp_sid', token, { maxAgeMs: SESSION_DAYS * 864e5, secure: isHttps(config) }));
 }
 

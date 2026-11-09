@@ -42,6 +42,15 @@ export function originCheck() {
   };
 }
 
+/**
+ * The visitor's IP. Render sits behind Cloudflare, so req.ip is a rotating proxy hop; Cloudflare sets
+ * CF-Connecting-IP to the real client and overwrites any value the client sends. Locally there is no header.
+ */
+export function clientIp(req) {
+  const cf = req.get('cf-connecting-ip');
+  return cf && /^[0-9a-fA-F:.]{3,45}$/.test(cf) ? cf : req.ip;
+}
+
 /** Fixed window per key. key(req) -> string|null (null = not limited). */
 export function rateLimit({ key, limit, windowMs = 60_000 }) {
   const hits = new Map();
