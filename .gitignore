@@ -8,3 +8,6 @@ reports/*.log
 .DS_Store
 db.json.tmp
 .superpowers/
+
+# tasteskill build checks and screenshots
+.taste-skill/

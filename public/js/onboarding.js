@@ -16,34 +16,11 @@ export const pendingInvite = {
 };
 
 // ---------------------------------------------------------------- O1 Welcome
+/** The welcome page is a static page of its own (public/welcome.html); its buttons link back to #/start and #/login. */
 export function viewWelcome() {
-  const how = (n, t, d, ex) => el('div', { class: 'mp-how__step' }, el('span', { class: 'mp-how__n' }, String(n)),
-    el('div', {}, el('div', { class: 'mp-how__t' }, t), el('div', { class: 'mp-how__d' }, d)), ex ? el('div', { class: 'mp-how__ex mp-stack mp-hide-phone', style: 'gap:6px' }, ex) : null);
-  const row = (l, r) => el('div', { class: 'mp-row mp-row--between mp-t-sm' }, el('span', {}, l), r);
-  mount(el('div', { class: 'mp-auth' },
-    el('header', { class: 'mp-auth__top' }, wordmark(), link('/login', { class: 'mp-btn mp-btn--ghost mp-hide-phone' }, 'Log in')),
-    el('main', { class: 'mp-hero' },
-      el('div', { class: 'mp-stack mp-stack--6' },
-        el('span', { class: 'mp-t-overline' }, 'For freelancers and the people who hire them'),
-        el('h1', { class: 'mp-hero__title' }, 'Get paid milestone by milestone. Safely.'),
-        el('p', { class: 'mp-t-body mp-muted mp-lead' }, 'Agree the job in plain terms. The client’s money waits with PayPal and is paid out one part at a time, only when the work is approved.'),
-        el('div', { class: 'mp-row mp-cta-row', style: 'gap:12px' },
-          link('/start', { class: 'mp-btn mp-btn--primary' }, 'Get started', icon('arrow-right')),
-          link('/login', { class: 'mp-btn mp-btn--secondary' }, 'Log in')),
-        el('span', { class: 'mp-row mp-t-sm mp-muted' }, icon('lock'), 'You’ll sign in with your PayPal account. No new password.'),
-        el('p', { class: 'mp-t-sm' }, el('b', {}, 'Hiring someone? '), 'You only pay for each part after you’ve seen it and approved it, and every job you hire for stays in one place.'),
-        el('span', { class: 'mp-row mp-t-sm mp-muted mp-hide-phone' }, icon('shield'), 'Payments are handled by PayPal. We never see your card or bank details.')),
-      el('div', { class: 'mp-how' },
-        how(1, 'Agree on milestones', 'Split the job into parts with a price and a date for each.',
-          [row('M1 · Design mockups', el('b', { class: 'mp-num' }, '240.00 USD')), row('M2 · Build website', el('b', { class: 'mp-num' }, '320.00 USD'))]),
-        el('div', { class: 'mp-how__line' }),
-        how(2, 'Deliver the work', 'The client funds each part first. PayPal holds the money while the work happens.',
-          row(el('span', { class: 'mp-row' }, icon('file'), 'mockup-home.png'), el('span', { class: 'mp-badge mp-badge--held' }, icon('lock'), 'Held by PayPal'))),
-        el('div', { class: 'mp-how__line' }),
-        how(3, 'Get paid via PayPal', 'When the client approves, PayPal pays you for that part.',
-          row(el('span', { class: 'mp-where mp-where--released' }, icon('check'), 'Paid to the freelancer'), el('span', { class: 'mp-badge mp-badge--success' }, icon('check'), 'Paid'))))),
-    el('footer', { class: 'mp-auth__foot' }, el('span', {}, 'Sandbox · fake money'), el('span', { class: 'mp-row' }, icon('lock'), ' Payments processed securely by PayPal'))));
+  location.replace('/welcome.html');
 }
+
 
 // ---------------------------------------------------------------- O2 Continue with PayPal
 function paypalLoginButton(next) {
