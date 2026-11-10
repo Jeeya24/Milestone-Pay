@@ -12,6 +12,7 @@ import { z } from 'zod';
 import * as db from './db.js';
 import { need, membersOf, roleOf, memberWithRole } from './access.js';
 import { userView } from './auth.js';
+import { issueInvoice, invoiceView, invoiceData, renderInvoiceHtml } from './invoice.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(HERE, 'fixtures');
@@ -202,6 +203,7 @@ export function milestoneView(m) {
     })),
     versions,
     proposal: proposalView([...d.proposals].reverse().find((p) => p.milestone_id === m.id && (p.status === 'pending' || p.status === 'approved'))) ?? null,
+    invoice: invoiceView(m),
   };
 }
 
@@ -1323,6 +1325,21 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Download all files of a milestone's current version as one zip ----
+  // ---- Invoice for a milestone ---------------------------------------------
+  // Exists only once the milestone was funded, approved by the client, captured and paid out to the freelancer.
+  // Both members can open it (inline) or download it (?download=1) as one self-contained HTML file.
+  r.get('/milestones/:id/invoice', need('milestone'), (req, res) => {
+    const m = getMilestone(req.params.id);
+    issueInvoice(m.id); // catches a payout that completed before invoices existed
+    const v = invoiceData(m.id);
+    if (!v) throw E('INVOICE_NOT_READY', 'The invoice is ready once this milestone is funded, approved by the client and paid out to the freelancer.', 409);
+    res.set({
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+      'Content-Disposition': `${req.query.download === '1' ? 'attachment' : 'inline'}; filename="${v.number}.html"`,
+    });
+    res.send(renderInvoiceHtml(v, { nonce: res.locals.cspNonce }));
+  });
+
   r.get('/milestones/:id/download-all', need('milestone'), (req, res) => {
     const m = getMilestone(req.params.id);
     const version = m.rev_count + 1;

@@ -206,7 +206,15 @@ export function msCard(m, { cur, fname, base, current = false, body = null, comp
     idx,
     el('div', {}, title, el('div', { class: 'mp-ms__meta' }, due ? el('span', {}, icon('calendar'), ` Due ${fmtDay(due)}`) : null, where(m, fname))),
     el('div', { class: 'mp-ms__right' }, moneyEl(m.amount_minor, m.currency || cur, 'md'), msBadge(m)),
-    body ? el('div', { class: 'mp-ms__body' }, body) : null);
+    body || m.invoice ? el('div', { class: 'mp-ms__body' }, body, invoiceLinks(m)) : null);
+}
+/** View and download links for a milestone's invoice (there is one only after it was paid out). */
+export function invoiceLinks(m) {
+  if (!m.invoice) return null;
+  return el('div', { class: 'mp-invoice', 'data-invoice': m.label }, el('span', { class: 'mp-row mp-t-sm' }, icon('file'), el('b', {}, 'Invoice'), el('span', { class: 'mp-muted' }, m.invoice.number)),
+    el('span', { class: 'mp-row', style: 'gap:4px' },
+      el('a', { class: 'mp-btn mp-btn--ghost mp-btn--sm', href: m.invoice.url, target: '_blank', rel: 'noopener', 'aria-label': `View the ${m.label} invoice` }, icon('eye'), 'View'),
+      el('a', { class: 'mp-btn mp-btn--secondary mp-btn--sm', href: `${m.invoice.url}?download=1`, download: `${m.invoice.number}.html`, 'aria-label': `Download the ${m.label} invoice` }, icon('download'), 'Download')));
 }
 export const viewUrl = (u) => u + (u.includes('?') ? '&' : '?') + 'inline=1';
 export function fileRow(f, { onRemove } = {}) {
@@ -335,7 +343,7 @@ export const sandboxNote = () => alertBox('info', 'info', el('span', {}, el('b',
 // ---------------------------------------------------------------- live updates
 const sigOf = (d) => JSON.stringify([d.project?.status, d.project?.title, d.agreement?.status, (d.notes || []).length, (d.chat || []).length,
   (d.members || []).map((m) => [m.user_id, m.name, m.avatar_url]),
-  (d.milestones || []).map((m) => [m.id, m.status, m.rev_count, m.payment?.status, m.payment?.payout_status, m.fundable, m.proposal?.id, m.proposal?.status, (m.deliverables || []).map((f) => f.id)]),
+  (d.milestones || []).map((m) => [m.id, m.status, m.invoice?.number, m.rev_count, m.payment?.status, m.payment?.payout_status, m.fundable, m.proposal?.id, m.proposal?.status, (m.deliverables || []).map((f) => f.id)]),
   (d.change_requests || []).map((c) => [c.id, c.status]), (d.ledger || []).length, (d.activity || []).length, (d.members || []).length]);
 let pollTimer = null;
 export function stopPoll() { if (pollTimer) clearInterval(pollTimer); pollTimer = null; }

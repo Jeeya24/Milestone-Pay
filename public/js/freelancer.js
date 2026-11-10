@@ -3,7 +3,7 @@ import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, pageHead, alertBox, errBox, loading, skeleton, toast, confirmDialog,
   money, moneyEl, fmtNum, parseMinor, major, fmtDate, fmtDay, fmtTime, fmtDateTime, fmtSize, plural, initial,
   badge, msBadge, where, projectBadge, AGREEMENT_BADGE, nextStep, emptyState, stat, progress, msCard, fileRow, copyText,
-  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil, titleOf, editableTitle, chatCard, memberOf,
+  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil, titleOf, editableTitle, chatCard, memberOf, invoiceLinks,
 } from './core.js';
 import { projectOverview } from './project.js';
 
@@ -521,7 +521,7 @@ function drawSubmit(d, m, keep = false) {
     holdWarning(m, cur, cname, 'freelancer'),
     revising ? el('div', { class: 'mp-stack' }, badge('issue', 'alert', `Changes requested · round ${m.rev_count}${m.rev_limit ? ` of ${m.rev_limit}` : ''}`),
       alertBox('issue', 'flag', el('b', {}, `${cname} asked for changes`), el('div', {}, `“${m.rev_note || ''}”`))) : null,
-    head, Pj.err ? alertBox('issue', 'alert', Pj.err) : null, body,
+    head, m.invoice ? el('div', { class: 'mp-card mp-card--raised' }, invoiceLinks(m)) : null, Pj.err ? alertBox('issue', 'alert', Pj.err) : null, body,
     revising || m.rev_count > 0 ? chatCard(d, 'freelancer', (x) => { const mm = x.milestones.find((y) => y.id === m.id); if (mm) drawSubmit(x, mm, true); }) : null,
     d.milestones.every((x) => x.status === 'paid') ? emptyState({ ic: 'check', title: 'All milestones paid', text: `Everything in the agreement is delivered and paid. Files stay available to both of you on the project page.`, actions: [link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary' }, 'Open project page')] }) : null));
 }

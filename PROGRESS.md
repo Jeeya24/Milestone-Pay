@@ -61,6 +61,7 @@
 - [x] 10 one lasting, reusable client link · 11 project chat from a revision request · 12 "held by Milestone Pay" copy
 - [x] 13 client payments two-column desktop layout · 15 add/remove milestones (up to 12) · 16 milestone title + description editable · 17 profile pictures + profiles
 - [ ] 14 payout to the freelancer's PayPal after capture: built and unit-tested with a stub. **Not run against the sandbox** (no credentials in the build session). Needs Payouts enabled on the REST app and one real run.
+- [x] Invoices: issued per milestone once funded, client-approved, captured and paid out; view + download for both people (`invoice.js`).
 - Ran: `npm test`, `scripts/e2e.js` (PayPal stubbed), `tests/qa/journey-ui.cjs` and `tests/qa/fixes-ui.cjs` in headless Chromium, no console errors.
 
 ## Status 2026-11-08

@@ -13,7 +13,7 @@ Node 22, Express 5, vanilla HTML/CSS/JS in `public/`, one `db.json` file, `./upl
 Allowed deps: express, multer, dotenv, archiver, zod, ai@4, @ai-sdk/google@1, @paypal/agent-toolkit. Ask before adding anything else.
 
 ## Layout
-`server.js` routes · `db.js` store + `transition()` · `paypal.js` REST helpers · `agent.js` Milestone Agent · `ai.js` LLM calls · `models.js` task→model map · `prompts/*.md` · `public/` · `scripts/smoke.js`, `scripts/e2e.js` · `seed.js` · `tests/` · `evals/`
+`server.js` routes · `db.js` store + `transition()` · `paypal.js` REST helpers · `agent.js` Milestone Agent · `invoice.js` invoices · `ai.js` LLM calls · `models.js` task→model map · `prompts/*.md` · `public/` · `scripts/smoke.js`, `scripts/e2e.js` · `seed.js` · `tests/` · `evals/`
 
 ## Hard rules
 - Money is integer satang (`amount_minor`). Never floats.

@@ -2,7 +2,7 @@
 import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, pageHead, alertBox, errBox, loading, skeleton, toast, confirmDialog,
   money, moneyEl, fmtNum, fmtDate, fmtDay, plural, initial, badge, msBadge, projectBadge, nextStep, emptyState, stat, progress, msCard, fileRow,
-  poll, stopPoll, names, planBase, curOf, sandboxNote, titleOf, chatCard, personChip,
+  poll, stopPoll, names, planBase, curOf, sandboxNote, titleOf, chatCard, personChip, invoiceLinks,
 } from './core.js';
 import { notesBox, holdWarning, projectActions, archivedList } from './freelancer.js';
 import { nextFor, nextCard } from './project.js';
@@ -268,6 +268,8 @@ export function viewReview(d, mid) {
     return mount(appShell('client', back(`/p/${pid}`, 'Payments'),
       el('div', { class: 'mp-narrow mp-stack mp-stack--4' }, el('div', { class: 'mp-stack', style: 'gap:2px' }, caption(d), el('h1', { class: 'mp-t-title' }, `${m.label} · ${m.title}`)),
         el('div', {}, msBadge(m)),
+        m.status === 'paid' && m.invoice ? el('div', { class: 'mp-card mp-card--raised' }, invoiceLinks(m)) : null,
+        m.status === 'paid' && !m.invoice ? el('p', { class: 'mp-t-sm mp-muted' }, `The invoice appears here once the payment has reached ${fname}’s PayPal.`) : null,
         m.status === 'paid' ? alertBox('success', 'check', `You paid ${fname} ${money(m.amount_minor, cur)} for ${m.label}.`) : m.status === 'revision_requested' ? alertBox('held', 'lock', `${fname} is revising. Your note: “${m.rev_note || ''}”`) : null,
         m.deliverables.length ? el('div', { class: 'mp-card mp-card--raised' }, m.deliverables.map((f) => fileRow(f))) : el('p', { class: 'mp-muted' }, 'No files delivered yet.'),
         m.status === 'revision_requested' ? chatCard(d, 'client', (x) => viewReview(x, mid)) : null,

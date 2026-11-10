@@ -12,6 +12,7 @@ import * as db from './db.js';
 import * as realPaypal from './paypal.js';
 import { loadPrompt } from './ai.js';
 import { MODELS, MAX_OUT, TEMPERATURE, costUsd } from './models.js';
+import { issueInvoice } from './invoice.js';
 
 export const AGENT_TIMEOUT_MS = 8000;
 // Spec says maxSteps 4. Gemini 3.x rejects a follow-up step that replays function calls without their
@@ -124,6 +125,7 @@ export async function payoutFor(milestoneId, { paypal = realPaypal } = {}) {
       db.save();
       db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'PAID_OUT', paypal_id: out.batch_id, amount_minor: m.amount_minor });
       db.activity(m.project_id, 'pp', `${m.label} ${usd(m.amount_minor, m.currency)} sent to the freelancer's PayPal account (payout ${out.batch_id})`);
+      issueInvoice(m.id); // funded, approved, captured and paid out: the invoice is due now
       return { status: 'SENT' };
     } catch (err) {
       Object.assign(pay, { payout_status: 'FAILED', payout_error: String(err?.paypal_name || err?.message || 'ERROR').slice(0, 80) });

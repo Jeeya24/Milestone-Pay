@@ -203,3 +203,8 @@ button.mp-person:hover { background: var(--surface-sunken); }
   .mp-chatsend { flex-direction: column; align-items: stretch; }
   .mp-ms--draft .mp-ms__right { align-items: center; }
 }
+
+/* invoice links on a paid milestone */
+.mp-invoice { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.mp-ms__body .mp-invoice { padding-top: var(--space-3); margin-top: var(--space-2); border-top: 1px solid var(--border); }
+.mp-ms__body > .mp-invoice:first-child { margin-top: 0; }

@@ -165,6 +165,21 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   await shot(F, 'project-page-paid');
   await F.goto(`${base}/#/p/${pid}/m/${m1}`); await F.waitForSelector('text=sent to your PayPal'); ok('14 milestone page says it was sent to your PayPal', true);
 
+  // invoice: only on the paid-out milestone, for both people, viewable and downloadable
+  await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('[data-invoice="M1"]');
+  ok('invoice shown on the paid milestone only (freelancer)', (await F.locator('[data-invoice]').count()) === 1);
+  await C.goto(`${base}/#/p/${pid}`); await C.waitForSelector('[data-invoice="M1"]'); await shot(C, 'client-payments-invoice');
+  ok('invoice shown on the paid milestone only (client)', (await C.locator('[data-invoice]').count()) === 1);
+  const [dl] = await Promise.all([C.waitForEvent('download'), C.getByRole('link', { name: 'Download the M1 invoice' }).click()]);
+  ok('client downloads the invoice file', /^INV-\d{8}-\w+\.html$/.test(dl.suggestedFilename()));
+  const invUrl = await F.getAttribute('[data-invoice="M1"] a[target="_blank"]', 'href');
+  const I = await F.context().newPage(); watch(I, 'I'); await I.goto(base + invUrl); await I.waitForSelector('h1:has-text("Invoice")');
+  const it = await txt(I);
+  ok('invoice names both people, the milestone, the amount and the PayPal references', ['Ploy Design', 'Baan Kafe', 'M1 · Homepage and menu design', '240.00 USD', 'Paid in full', 'STUBPAYOUT-'].every((x) => it.includes(x)));
+  await shot(I, 'invoice'); await I.close();
+  await C.goto(`${base}/#/p/${pid}/m/${m1}`); await C.waitForSelector('[data-invoice="M1"]'); ok('invoice on the client’s milestone page', true);
+  await F.goto(`${base}/#/p/${pid}/m/${m1}`); await F.waitForSelector('[data-invoice="M1"]'); ok('invoice on the freelancer’s milestone page', true);
+
   // 1: archive and delete on the projects list
   await F.goto(`${base}/#/new`); await F.waitForSelector('#chatText'); await F.fill('#chatText', fs.readFileSync(repo + '/fixtures/baan-kafe.txt', 'utf8'));
   await F.click('#generate'); await F.waitForSelector('.mp-terms', { timeout: 20000 });
