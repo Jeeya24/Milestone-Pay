@@ -72,7 +72,7 @@ test('/authorize: stores payment, ledger AUTHORIZED, activity, notification, sta
   assert.equal(r.status, 200);
   assert.equal(r.body.milestone.status, 'authorized');
   assert.deepEqual(r.body.payment, {
-    order_id: o.order_id, authorization_id: `AUTH-${o.order_id}`, status: 'AUTHORIZED', expires_at: '2026-12-01T00:00:00Z', capture_id: null,
+    order_id: o.order_id, authorization_id: `AUTH-${o.order_id}`, status: 'AUTHORIZED', expires_at: '2026-12-01T00:00:00Z', capture_id: null, payout_status: null, payout_batch_id: null,
   });
   const d = db.load();
   assert.equal(d.ledger.length, 1);

@@ -6,7 +6,7 @@ const loginUrl = (next) => `/auth/paypal/start?next=${encodeURIComponent(next ||
 /** ?login=cancelled|failed from the OAuth callback; read once, then removed from the address bar. */
 let loginFlag = params.get('login');
 if (loginFlag) history.replaceState(null, '', location.pathname + location.hash);
-const takeLoginFlag = () => { const f = loginFlag; loginFlag = null; return f; };
+export const takeLoginFlag = () => { const f = loginFlag; loginFlag = null; return f; };
 
 const INVITE_KEY = 'mp_invite';
 export const pendingInvite = {
@@ -47,7 +47,11 @@ function testLogin(next) {
   const err = el('div');
   return el('details', { class: 'mp-testlogin' }, el('summary', { class: 'mp-t-caption mp-muted' }, 'Local test login (TEST_AUTH=1)'),
     el('div', { class: 'mp-row', style: 'margin-top:8px' }, name, el('button', { class: 'mp-btn mp-btn--secondary', type: 'button', onclick: async () => {
-      try { await api('/auth/test-login', { body: { name: name.value }, noLoginRedirect: true }); location.href = next.startsWith('/#') ? next : '/#/'; location.reload(); }
+      try {
+        const r = await api('/auth/test-login', { body: { name: name.value }, noLoginRedirect: true });
+        // A query change is a real page load (a hash change alone would re-route the logged-out page first).
+        location.assign(`/?login=${r.restored ? 'restored' : 'ok'}${next.startsWith('/#') ? next.slice(1) : '#/'}`);
+      }
       catch (e) { err.replaceChildren(errBox(e)); }
     } }, 'Log in')), err);
 }
@@ -153,7 +157,8 @@ export function viewRole() {
 
 // ---------------------------------------------------------------- O4a / O4b setup
 const SKILLS = ['Web design', 'Branding', 'Illustration', 'Photography', 'Copywriting', 'Development', 'Video'];
-const HIRE = ['Website', 'Logo & branding', 'Photos', 'Social media', 'Writing', 'Something else'];
+const HIRE = ['Website', 'Logo & branding', 'Photos', 'Social media', 'Writing'];
+export const OTHER = 'Something else';
 const paypalConnected = () => alertBox('success', 'check', el('b', {}, 'PayPal connected'), S.me.email ? ` · ${S.me.email}. ` : '. ', 'This is the PayPal account you sign in and pay or get paid with.');
 
 export function viewSetup(role) {
@@ -164,7 +169,8 @@ export function viewSetup(role) {
   const nameMsg = el('span', { class: 'mp-ok' }, icon('check'), role === 'client' ? 'Freelancers will see this on agreements' : S.me.name ? `Prefilled from PayPal (${S.me.name}). Change it to your studio name if you like.` : 'Clients will see this name');
   nameIn.addEventListener('input', () => { if (nameIn.value.trim() && nameMsg.className === 'mp-err') { nameIn.classList.remove('mp-input--error'); nameMsg.className = 'mp-ok'; nameMsg.replaceChildren(icon('check'), role === 'client' ? 'Freelancers will see this on agreements' : 'Clients will see this name'); } });
   const nameLabel = el('label', { class: 'mp-label', for: 'displayName' }, role === 'client' ? 'Business name' : 'Display name');
-  const tags = tagPicker(role === 'client' ? HIRE : SKILLS, role === 'client' ? S.me.hire_for : S.me.skills, { allowAdd: role === 'freelancer', addLabel: 'Add a skill and press Enter' });
+  const tags = role === 'client' ? tagPicker(HIRE, S.me.hire_for, { other: OTHER, addLabel: 'Type what you hire for' })
+    : tagPicker(SKILLS, S.me.skills, { allowAdd: true, addLabel: 'Add a skill' });
   const tagErr = el('div');
   const bio = role === 'freelancer' ? el('textarea', { class: 'mp-input', id: 'bio', rows: 2, maxlength: 160, placeholder: 'Bangkok-based designer for cafés and small shops.' }, S.me.bio || '') : null;
   const bioCount = el('span', { class: 'mp-t-caption mp-muted' }, `${(S.me.bio || '').length} / 160`);
@@ -201,7 +207,7 @@ export function viewSetup(role) {
     role === 'client' ? field(el('label', { class: 'mp-label' }, 'Are you hiring as…'), seg) : null,
     field(el('div', { class: 'mp-label-row' }, nameLabel), nameIn, nameMsg),
     field(el('label', { class: 'mp-label' }, role === 'client' ? 'What do you usually hire for?' : 'What do you do?', role === 'client' ? el('span', { class: 'mp-opt' }, '(optional)') : null),
-      el('span', { class: 'mp-help' }, role === 'client' ? 'Helps us suggest milestones. Pick any.' : 'Pick at least one, or add your own.'), tags.node, tagErr),
+      el('span', { class: 'mp-help' }, role === 'client' ? 'Helps us suggest milestones. Pick any, or choose “Something else” and type your own.' : 'Pick at least one, or add your own.'), tags.node, tagErr),
     bio ? field(el('div', { class: 'mp-label-row' }, el('label', { class: 'mp-label', for: 'bio' }, 'Short bio', el('span', { class: 'mp-opt' }, '(optional)')), bioCount), bio) : null,
     el('div', { class: 'mp-sticky-cta' }, finish), err), { backTo: fromLink ? null : '/welcome/role' }));
 }
@@ -230,3 +236,18 @@ export async function viewDone() {
 }
 
 export { loginUrl, myName, toast };
+
+/** Shown right after “Delete account”: the data goes in 15 days unless they log in again before then. */
+export function viewDeletionScheduled() {
+  let when = null;
+  try { when = sessionStorage.getItem('mp_delete_on'); } catch { /* private mode */ }
+  const d = when ? new Date(when) : null;
+  const known = !!d && !isNaN(d);
+  const date = known ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' }) : '';
+  mount(authShell(el('div', { class: 'mp-authcard' },
+    el('div', { class: 'mp-authcard__head' }, el('span', { class: 'mp-authcard__icon' }, icon('clock', 'mp-i--lg')),
+      el('h1', { class: 'mp-t-title' }, 'Your account will be deleted'),
+      el('p', { class: 'mp-muted mp-t-sm' }, known ? `You’re logged out. On ${date} we delete your profile, your projects and their files for good.` : 'You’re logged out. In 15 days we delete your profile, your projects and their files for good.')),
+    alertBox('info', 'undo', el('b', {}, 'Changed your mind? '), `Log in with PayPal before ${known ? date : 'then'} and the deletion stops. Everything will be as you left it.`),
+    paypalLoginButton('/#/'), trust())));
+}

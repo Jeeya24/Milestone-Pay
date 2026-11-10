@@ -62,7 +62,7 @@ The TypeScript toolkit already in your project decides the stack: one language, 
 | [Render](https://paypalaihackathon.devpost.com/details/render) | Later | $50 credits; live URL for judges |
 | [APIMatic Context Plugin](https://paypalaihackathon.devpost.com/details/apimatic) | Light | Extra PayPal API context in Claude Code |
 | [Postman PayPal collection](https://www.postman.com/paypal) | Light | Hand-test sandbox calls during the S1 spike |
-| [Payouts](https://developer.paypal.com/docs/payouts/) | Skip | Freelancer is the merchant, so capture pays them directly |
+| [Payouts](https://developer.paypal.com/docs/payouts/) | Use (2026-11-10) | After a capture, the amount is sent to the freelancer's PayPal email. See docs/api.md, Fix list |
 | [Invoicing](https://developer.paypal.com/invoicing/about) | Stretch | Receipt per paid milestone |
 | [Disputes](https://developer.paypal.com/platforms/disputes/overview) | Mention only | Revisions and cancel-and-release happen before a PayPal dispute |
 | AG Grid, Elastic, KERNEL, Channel3, Astropods, Zapier | Skip | Don't fit the core loop |
@@ -233,6 +233,8 @@ Milestone Pay **never holds money**. The client authorizes the current milestone
 &#91;embedded content: milestone money flow · 6 states\]
 
 **Who the merchant is:** the freelancer. Milestone Pay is software acting on the freelancer's own PayPal account, like an invoicing tool. In the demo the REST app belongs to Ploy's sandbox business account, and Nok uses a sandbox personal account.
+
+**Update 2026-11-10 (owner decision):** in the multi-user beta the REST app is the Milestone Pay merchant account, so the product says the money is *held by Milestone Pay*. After the client approves, the capture lands on that account and a PayPal Payout sends the amount to the freelancer's PayPal.
 
 1. **Fund:** the server creates an order with `intent: AUTHORIZE` (amount from `db.json`, `custom_id` = milestone id, `PayPal-Request-Id`). Nok approves in the PayPal popup; the server calls `/authorize` and stores `authorization_id` and its expiry → `authorized`.
 2. **Submit:** Ploy uploads files and marks the milestone delivered → `submitted`. This event wakes the agent.

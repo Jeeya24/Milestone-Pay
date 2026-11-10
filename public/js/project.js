@@ -2,12 +2,13 @@
 import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, alertBox, errBox, toast, money, moneyEl, fmtDay, fmtDateTime, fmtDate,
   badge, msBadge, nextStep, stat, progress, msCard, fileRow, poll, names, planBase, curOf, dueOf, plural, emptyState,
+  titleOf, editableTitle, chatCard, personChip,
 } from './core.js';
 import { inviteBox, holdWarning } from './freelancer.js';
 
 const HELD = ['authorized', 'submitted', 'revision_requested'];
 const LEDGER = {
-  AUTHORIZED: ['held', 'lock', 'Held by PayPal'], CAPTURED: ['released', 'check', 'Paid to'], VOIDED: ['refunded', 'undo', 'Cancelled · not charged'], REFUNDED: ['refunded', 'undo', 'Refunded'],
+  AUTHORIZED: ['held', 'lock', 'Held by Milestone Pay'], CAPTURED: ['released', 'check', 'Released by the client'], PAID_OUT: ['released', 'banknote', 'Sent to PayPal'], VOIDED: ['refunded', 'undo', 'Cancelled · not charged'], REFUNDED: ['refunded', 'undo', 'Refunded'],
 };
 const P = { refreshed: null, refreshing: false, refreshErr: null, guard: null };
 
@@ -26,15 +27,15 @@ export function nextFor(d, role) {
   if (!m) return { ic: 'check', text: 'Everything is paid', sub: 'Files and the payment history stay here for both of you.' };
   if (m.status === 'voided') return { ic: 'x', text: `${m.label} was cancelled`, sub: role === 'client' ? 'You weren’t charged for it. Later milestones won’t start.' : `${cname} wasn’t charged. Later milestones won’t start.` };
   if (role === 'client') {
-    if (m.status === 'agreed') return { text: `Fund ${m.label} so ${fname} can start`, sub: `${money(m.amount_minor, cur)} · PayPal holds it until you approve the work.`, btn: `Fund ${m.label}`, to: `/p/${pid}` };
+    if (m.status === 'agreed') return { text: `Fund ${m.label} so ${fname} can start`, sub: `${money(m.amount_minor, cur)} · Milestone Pay holds it until you approve the work.`, btn: `Fund ${m.label}`, to: `/p/${pid}` };
     if (m.status === 'submitted') return { ic: 'eye', text: `${fname} delivered ${m.label} · ${m.title}`, sub: `Open the files. If you’re happy, pay ${fname} ${money(m.amount_minor, cur)}.`, btn: `Review ${m.label}`, to: `/p/${pid}/m/${m.id}` };
-    if (m.status === 'revision_requested') return { ic: 'clock', text: `${fname} is revising ${m.label}`, sub: 'Your money stays held by PayPal until you approve.' };
-    return { ic: 'clock', text: `${fname} is working on ${m.label}`, sub: 'PayPal holds your money. You’ll review the files when they’re delivered.' };
+    if (m.status === 'revision_requested') return { ic: 'clock', text: `${fname} is revising ${m.label}`, sub: 'Your money stays held by Milestone Pay until you approve.' };
+    return { ic: 'clock', text: `${fname} is working on ${m.label}`, sub: 'Milestone Pay holds your money. You’ll review the files when they’re delivered.' };
   }
-  if (m.status === 'agreed') return { ic: 'clock', text: `Waiting for ${cname} to fund ${m.label}`, sub: `${money(m.amount_minor, cur)}. Start once PayPal holds it.`, btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
-  if (m.status === 'submitted') return { ic: 'clock', text: `Waiting for ${cname} to review ${m.label}`, sub: 'The money stays held by PayPal.', btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
+  if (m.status === 'agreed') return { ic: 'clock', text: `Waiting for ${cname} to fund ${m.label}`, sub: `${money(m.amount_minor, cur)}. Start once Milestone Pay holds it.`, btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
+  if (m.status === 'submitted') return { ic: 'clock', text: `Waiting for ${cname} to review ${m.label}`, sub: 'The money stays held by Milestone Pay.', btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
   if (m.status === 'revision_requested') return { text: `Revise ${m.label} and send it back`, sub: `${cname} asked for changes.`, btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
-  return { text: `Do the work and submit ${m.label}`, sub: `${cname} funded ${money(m.amount_minor, cur)}. It’s held by PayPal.`, btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
+  return { text: `Do the work and submit ${m.label}`, sub: `${cname} funded ${money(m.amount_minor, cur)}. It’s held by Milestone Pay.`, btn: `Go to ${m.label}`, to: `/p/${pid}/m/${m.id}` };
 }
 export const nextCard = (n) => n && nextStep({ ic: n.ic, text: n.text, sub: n.sub, action: n.btn ? link(n.to, { class: 'mp-btn mp-btn--primary' }, n.btn, icon('arrow-right')) : null });
 
@@ -76,7 +77,7 @@ function ledgerCard(d, role) {
       el('tbody', {}, rows.length ? rows.map((l) => {
         const [k, ic, t] = LEDGER[l.event] || ['none', 'info', l.event];
         return el('tr', {}, el('td', { class: 'mp-num' }, fmtDateTime(l.at)), el('td', {}, l.label || ''),
-          el('td', {}, el('span', { class: `mp-where mp-where--${k}` }, icon(ic), l.event === 'CAPTURED' ? `Paid to ${fname}` : t)),
+          el('td', {}, el('span', { class: `mp-where mp-where--${k}` }, icon(ic), l.event === 'CAPTURED' ? `Released to ${fname}` : l.event === 'PAID_OUT' ? `Sent to ${fname}’s PayPal` : t)),
           el('td', { class: 'mp-ref mp-hide-phone', title: l.paypal_id || '' }, l.paypal_id || ''), el('td', { class: 'num mp-num mp-strong' }, money(l.amount_minor, cur)));
       }) : el('tr', {}, el('td', { colspan: '5', class: 'mp-muted', style: 'text-align:center;padding:24px' }, icon('banknote'), ' No payments yet.',
         role === 'client' ? ' You fund the first milestone after approving the agreement.' : ` ${names(d).cname} funds the first milestone after approving the agreement.`))))));
@@ -136,21 +137,23 @@ function draw(d, role, keep = false) {
   const shell = appShell(role,
     back(role === 'client' ? '/jobs' : '/projects', role === 'client' ? 'Your jobs' : 'Your projects'),
     el('div', { class: 'mp-row mp-row--between mp-row--top mp-row--wrap', style: 'gap:16px' },
-      el('div', { class: 'mp-stack', style: 'gap:6px' }, el('h1', { class: 'mp-t-title' }, b.title || d.project.title || 'Project'),
+      el('div', { class: 'mp-stack', style: 'gap:6px;min-width:0' },
+        role === 'freelancer' ? editableTitle(d, (x) => { d = x; draw(x, role, true); }) : el('h1', { class: 'mp-t-title' }, titleOf(d)),
         el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted', style: 'gap:16px' },
           d.agreement?.status === 'approved' ? badge('success', 'check', `Agreement v${d.agreement.version} · approved by both`) : null,
-          el('span', { class: 'mp-row' }, icon('user'), role === 'client' ? fname : cname), deadline ? el('span', { class: 'mp-row' }, icon('calendar'), `Due ${deadline}`) : null)),
+          personChip(d, role === 'client' ? 'freelancer' : 'client'), deadline ? el('span', { class: 'mp-row' }, icon('calendar'), `Due ${deadline}`) : null)),
       el('div', { class: 'mp-stack', style: 'gap:2px;align-items:flex-end' }, moneyEl(total, cur, 'lg'),
         extra > 0 ? el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${money(b.total_minor, cur)} agreed + ${money(extra, cur)} change orders`) : null)),
     voided ? (role === 'client' ? alertBox('info', 'info', el('b', {}, `You cancelled ${voided.label}. `), `You weren’t charged for it.${paid ? ` ${fname} keeps the ${money(paid, cur)} already paid.` : ''}`)
       : alertBox('issue', 'x', el('b', {}, `${cname} cancelled ${voided.label}. `), `The ${money(voided.amount_minor, cur)} hold was cancelled and ${cname} wasn’t charged. Later milestones won’t start.${paid ? ` ${money(paid, cur)} stays paid.` : ''}`)) : null,
     el('div', { class: 'mp-statrow' },
       el('div', { class: 'mp-stat' }, progress(ms)),
-      stat('lock', 'Held by PayPal', held, cur),
+      stat('lock', 'Held by Milestone Pay', held, cur),
       stat('check', role === 'client' ? `Paid to ${fname}` : 'Paid to you', paid, cur)),
     curM ? holdWarning(curM, cur, role === 'client' ? fname : cname, role) : null,
     nextCard(nextFor(d, role)),
-    role === 'freelancer' && !(d.members || []).some((m) => m.role === 'client') ? inviteBox(d) : null,
+    role === 'freelancer' ? inviteBox(d) : null,
+    chatCard(d, role, (x) => { d = x; draw(x, role, true); }),
     el('div', { class: 'mp-stack mp-stack--3' }, el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, el('h2', { class: 'mp-t-section' }, 'Milestones'),
       el('div', { class: 'mp-row mp-row--wrap' },
         link(`/p/${pid}/agreement`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('file'), 'Agreement'),

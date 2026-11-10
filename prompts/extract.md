@@ -21,7 +21,7 @@ Each line is `[m<N>] Sender: text`. Cite messages only by their ids (`m1`, `m2`,
   - Other gaps (vague wording such as "look modern", unclear who supplies assets, unclear dates) get ids `g2`, `g3`, ... with a one-line `text`, a `fix_label` that starts with "Set:" or "Add:" and proposes a concrete fix, and `term_key` / `term_value` set to `null` unless the fix is the value of one of the 7 terms.
   - If there are no gaps, return an empty array.
 - `milestones`: the work split into payable steps, in order.
-  - Follow the split the chat agreed. If the chat agrees to split payment into named stages, use those stages. If it only says the work is split, use design, build, launch.
+  - Follow the split the chat agreed. If the chat agrees to split payment into named stages, use those stages, however many there are: there is no limit of three, so four, five or more stages become four, five or more milestones. If it only says the work is split, use design, build, launch.
   - Amounts are integers in the smallest unit (satang) and must add up exactly to `total_minor`. If the chat does not state the amounts, split 30% / 40% / 30% across three milestones, rounded to whole currency units (whole multiples of 100). Do not invent amounts that disagree with the chat.
   - `criteria`: 2 to 4 short, checkable acceptance criteria per milestone, taken from what the chat says is wanted.
   - `start_day` and `end_day`: integer days from the project start for a simple timeline (first milestone starts at 0, each next one starts where the previous ends, keep the whole plan realistic and before the deadline).

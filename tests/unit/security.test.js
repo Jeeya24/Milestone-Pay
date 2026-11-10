@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import * as db from '../../db.js';
 import { runWithUser } from '../../context.js';
 import { createApp } from '../../server.js';
+import { purgeDueAccounts } from '../../routes.js';
 import { tmpEnv, startApp, paypalStub, aiStub, login, makeProject, testConfig } from './helpers.js';
 
 let app; let pp;
@@ -115,7 +116,7 @@ test('request log never contains query strings, codes or cookies', async () => {
   assert.deepEqual(Object.keys(row).sort(), ['method', 'ms', 'path', 'status', 't', 'user']);
 });
 
-test('DELETE /api/me: refused while a hold is active, otherwise removes projects and sessions', async () => {
+test('DELETE /api/me: refused while a hold is active; otherwise logs out and erases the data after 15 days', async () => {
   await boot();
   const F = await login(app.call, 'Ploy');
   const C = await login(app.call, 'Nok');
@@ -134,18 +135,59 @@ test('DELETE /api/me: refused while a hold is active, otherwise removes projects
   const mine = await makeProject(S.call);
   const del = await S.call('DELETE', '/api/me');
   assert.equal(del.status, 200);
+  const days = (Date.parse(del.body.scheduled_for) - Date.now()) / 864e5;
+  assert.ok(days > 14.9 && days <= 15, String(days));
+  // logged out everywhere, but nothing is erased yet
+  assert.equal(db.load().sessions.some((s) => s.user_id === S.user.id), false);
+  assert.equal((await S.call('GET', '/api/me')).status, 401);
+  assert.equal(db.load().projects.some((p) => p.id === mine.pid), true);
+  assert.equal(purgeDueAccounts(Date.now() + 14 * 864e5), 0);
+  assert.equal(db.load().projects.some((p) => p.id === mine.pid), true);
+  // after 15 days the purge erases the projects, rows and profile
+  assert.equal(purgeDueAccounts(Date.now() + 15 * 864e5 + 1000), 1);
   assert.equal(db.load().projects.some((p) => p.id === mine.pid), false);
   assert.equal(db.load().messages.some((m) => m.project_id === mine.pid), false);
-  assert.equal(db.load().sessions.some((s) => s.user_id === S.user.id), false);
   const u = db.load().users.find((x) => x.id === S.user.id);
   assert.ok(u.deleted_at);
   assert.equal(u.email, null);
-  assert.equal((await S.call('GET', '/api/me')).status, 401);
+  assert.equal(u.paypal_user_id, null);
+  assert.equal(purgeDueAccounts(Date.now() + 30 * 864e5), 0);
 
   // the client cannot leave either while their payment is on hold (it would strand the hold)
   const cdel = await C.call('DELETE', '/api/me');
   assert.equal(cdel.status, 409);
   assert.equal(db.load().projects.some((p) => p.id === pid), true);
+});
+
+test('logging in during the 15 days cancels the deletion and keeps everything', async () => {
+  await boot();
+  const S = await login(app.call, 'Sam');
+  const mine = await makeProject(S.call);
+  await S.call('DELETE', '/api/me');
+  assert.ok(db.load().users.find((x) => x.id === S.user.id).delete_after);
+  const back = await app.call('POST', '/auth/test-login', { name: 'Sam' });
+  assert.equal(back.body.restored, true);
+  assert.equal(back.body.user.id, S.user.id);
+  const u = db.load().users.find((x) => x.id === S.user.id);
+  assert.equal(u.delete_after, undefined);
+  assert.equal(u.delete_requested_at, undefined);
+  assert.equal(purgeDueAccounts(Date.now() + 60 * 864e5), 0);
+  const S2 = await login(app.call, 'Sam');
+  assert.equal((await S2.call('GET', `/api/projects/${mine.pid}`)).status, 200);
+  assert.equal((await app.call('POST', '/auth/test-login', { name: 'Sam' })).body.restored, false);
+});
+
+test('an account with money on hold is not erased until the hold is settled', async () => {
+  await boot();
+  const F = await login(app.call, 'Ploy');
+  const { pid, milestones } = await makeProject(F.call);
+  await F.call('DELETE', '/api/me');
+  db.load().milestones.find((m) => m.id === milestones[0].id).status = 'authorized'; db.save();
+  assert.equal(purgeDueAccounts(Date.now() + 20 * 864e5), 0);
+  assert.equal(db.load().projects.some((p) => p.id === pid), true);
+  db.load().milestones.find((m) => m.id === milestones[0].id).status = 'voided'; db.save();
+  assert.equal(purgeDueAccounts(Date.now() + 20 * 864e5), 1);
+  assert.equal(db.load().projects.some((p) => p.id === pid), false);
 });
 
 test('createApp with a production config refuses test-login', async () => {

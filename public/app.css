@@ -139,3 +139,67 @@ a.mp-pp-login.is-loading { opacity: .6; pointer-events: none; }
 @keyframes mp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 button.mp-back { background: none; border: 0; padding: 0; cursor: pointer; align-self: flex-start; font-family: inherit; }
 a.mp-back { align-self: flex-start; }
+
+/* ------------------------------------------------------------------ fix list 2026-11-10 */
+/* profile pictures */
+.mp-avatar--img, .mp-avatarbtn__img { overflow: hidden; padding: 0; background: var(--surface-sunken); }
+.mp-avatar--img img, .mp-avatarbtn__img img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
+.mp-avatar--xl { width: 72px; height: 72px; font-size: 26px; }
+.mp-avatarfield { gap: var(--space-4); align-items: center; flex-wrap: nowrap; }
+.mp-profile__head { display: flex; gap: var(--space-4); align-items: center; }
+.mp-dialog span.mp-tag { cursor: default; }
+button.mp-person { display: inline-flex; align-items: center; gap: var(--space-2); min-height: 36px; padding: 2px 10px 2px 2px; border-radius: 999px; border: 1px solid var(--border-control); background: var(--surface-raised); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+button.mp-person:hover { background: var(--surface-sunken); }
+
+/* buttons with long labels wrap inside their card instead of spilling out of it (Gaps found) */
+.mp-gap > .mp-grow { min-width: 0; }
+.mp-gap .mp-btn { white-space: normal; text-align: left; justify-content: flex-start; height: auto; min-height: 36px; padding-top: 8px; padding-bottom: 8px; max-width: 100%; overflow-wrap: anywhere; }
+.mp-card { min-width: 0; }
+.mp-card__head { flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.mp-alert .mp-grow, .mp-next .mp-grow { min-width: 0; overflow-wrap: anywhere; }
+.mp-bubble, .mp-ms__title, .mp-ms__crit li, .mp-term dd { overflow-wrap: anywhere; }
+.mp-ms__crit li { min-width: 0; }
+
+/* project rows: open + archive + delete */
+.mp-jobrow__actions { display: flex; align-items: center; gap: var(--space-1); }
+.mp-iconbtn--danger:hover { background: var(--issue-bg); color: var(--issue); }
+.mp-iconbtn:disabled { opacity: .5; cursor: default; }
+.mp-archived > summary { cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-2); padding: var(--space-2) 0; }
+.mp-archived .mp-jobrow { opacity: .85; }
+
+/* rename a project */
+.mp-titleedit { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.mp-titleedit .mp-t-title { overflow-wrap: anywhere; min-width: 0; }
+.mp-titleedit__input { flex: 1 1 280px; max-width: 520px; font-size: 20px; font-weight: 600; }
+
+/* draft milestones: editable title, description and amount */
+.mp-ms--draft { align-items: start; }
+.mp-ms--draft .mp-ms__right { align-items: flex-end; gap: var(--space-2); }
+.mp-ms__desc { min-height: 84px; resize: vertical; font-family: var(--font-sans); line-height: 20px; }
+.mp-addtag { flex-wrap: nowrap; }
+.mp-addtag .mp-input { flex: 1; min-width: 0; }
+.mp-addtag[hidden] { display: none; }
+
+/* project chat */
+.mp-chatlog { max-height: 360px; overflow-y: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.mp-chatlog__tag { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--issue); margin-bottom: 2px; }
+.mp-chatlog__tag .mp-i { width: 14px; height: 14px; }
+.mp-chatsend { display: flex; gap: var(--space-2); align-items: flex-end; }
+.mp-chatsend .mp-input { flex: 1; min-width: 0; resize: vertical; }
+
+/* client payments: two columns on desktop */
+.mp-narrow { max-width: 640px; }
+.mp-paypage { width: 100%; max-width: 1080px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: var(--space-6) var(--space-8); align-items: start; }
+.mp-paypage__head { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: flex-end; gap: var(--space-4); flex-wrap: wrap; }
+.mp-paypage__side { position: sticky; top: 88px; }
+.mp-paypage .mp-paypal { max-width: 480px; }
+@media (max-width: 980px) {
+  .mp-paypage { grid-template-columns: minmax(0, 1fr); max-width: 640px; }
+  .mp-paypage__side { position: static; grid-row: 2; }
+}
+@media (max-width: 760px) {
+  .mp-jobrow__actions { justify-content: space-between; }
+  .mp-jobrow__actions > .mp-btn { flex: 1; }
+  .mp-chatsend { flex-direction: column; align-items: stretch; }
+  .mp-ms--draft .mp-ms__right { align-items: center; }
+}

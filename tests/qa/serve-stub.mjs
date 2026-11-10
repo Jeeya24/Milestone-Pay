@@ -10,6 +10,7 @@ const paypal = {
   authorizeOrder: async (o) => ({ authorization_id: `STUBAUTH-${o}`, status: 'CREATED', expires_at: '2027-01-01T00:00:00Z' }),
   captureAuth: async (a) => ({ id: `STUBCAP-${a}`, status: 'COMPLETED' }),
   voidAuth: async () => ({ status: 'VOIDED' }),
+  createPayout: async ({ batchId }) => ({ batch_id: `STUBPAYOUT-${batchId.slice(-6)}`, status: 'PENDING' }),
   getOrder: async (o) => ({ id: o, status: 'COMPLETED', purchase_units: [{ payments: { authorizations: [{ id: `STUBAUTH-${o}`, status: 'CREATED' }] } }] }),
 };
 const classifyChange = async () => ({ classification: 'new_work', reason: 'Not in the agreed scope.', reason_source_ids: [],

@@ -90,7 +90,47 @@ export async function captureExecutor({ milestone_id, proposal_id }, { paypal = 
     db.save();
     db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'CAPTURED', paypal_id: cap.id, amount_minor: m.amount_minor });
     db.activity(m.project_id, 'agent', `${m.label} ${usd(m.amount_minor, m.currency)} captured and released to the freelancer (capture ${cap.id})`);
-    return { ok: true, capture_id: cap.id, status: 'CAPTURED' };
+    const payout = await payoutFor(m.id, { paypal });
+    return { ok: true, capture_id: cap.id, status: 'CAPTURED', payout: payout.status };
+  });
+}
+
+/**
+ * Milestone Pay holds the client's payment; once it is captured this sends it on to the freelancer's own PayPal
+ * (the email they log in with). Same gate as the capture: the milestone must be paid through an executed release
+ * proposal. Never throws and never undoes the capture: a failed payout is recorded and retried from
+ * "Check with PayPal". The batch id is derived from the capture id, so PayPal cannot pay it twice.
+ */
+export async function payoutFor(milestoneId, { paypal = realPaypal } = {}) {
+  const d = db.load();
+  const m = d.milestones.find((x) => x.id === milestoneId);
+  const pay = m && [...d.payments].reverse().find((p) => p.milestone_id === m.id && p.status === 'CAPTURED' && p.capture_id);
+  const released = m && d.proposals.some((p) => p.milestone_id === m.id && p.action === 'release' && p.status === 'executed');
+  if (!m || m.status !== 'paid' || !pay || !released) return { status: 'NO_APPROVAL' };
+  if (pay.payout_status === 'SENT') return { status: 'SENT', already: true };
+  if (typeof paypal.createPayout !== 'function') return { status: 'SKIPPED' };
+  return single(`payout:${pay.capture_id}`, async () => {
+    if (pay.payout_status === 'SENT') return { status: 'SENT', already: true };
+    const member = d.project_members.find((x) => x.project_id === m.project_id && x.role === 'freelancer');
+    const email = d.users.find((u) => u.id === member?.user_id)?.email || null;
+    if (!email) {
+      Object.assign(pay, { payout_status: 'FAILED', payout_error: 'NO_PAYPAL_EMAIL' });
+      db.save();
+      return { status: 'FAILED' };
+    }
+    try {
+      const out = await paypal.createPayout({ batchId: `payout-${pay.capture_id}`, email, amount_minor: m.amount_minor, cur: m.currency, note: `${m.label} ${m.title}` });
+      Object.assign(pay, { payout_status: 'SENT', payout_batch_id: out.batch_id, payout_error: null });
+      db.save();
+      db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'PAID_OUT', paypal_id: out.batch_id, amount_minor: m.amount_minor });
+      db.activity(m.project_id, 'pp', `${m.label} ${usd(m.amount_minor, m.currency)} sent to the freelancer's PayPal account (payout ${out.batch_id})`);
+      return { status: 'SENT' };
+    } catch (err) {
+      Object.assign(pay, { payout_status: 'FAILED', payout_error: String(err?.paypal_name || err?.message || 'ERROR').slice(0, 80) });
+      db.save();
+      db.activity(m.project_id, 'pp', `${m.label}: sending the payment on to the freelancer's PayPal did not go through yet. It will be retried.`);
+      return { status: 'FAILED' };
+    }
   });
 }
 

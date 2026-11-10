@@ -115,6 +115,22 @@ export async function refundCapture(captureId, amount_minor) {
   return { id: d.id, status: d.status };
 }
 
+/**
+ * Send a captured milestone payment on to the freelancer's PayPal (Payouts API). batchId is the idempotency key:
+ * PayPal refuses a second batch with the same sender_batch_id, so a retry can never pay twice.
+ */
+export async function createPayout({ batchId, email, amount_minor, cur = currency(), note = '' }) {
+  const { currency_code, value } = toMoney(amount_minor, cur);
+  const d = await call('POST', '/v1/payments/payouts', {
+    requestId: batchId,
+    body: {
+      sender_batch_header: { sender_batch_id: batchId, email_subject: 'You have a payment from Milestone Pay' },
+      items: [{ recipient_type: 'EMAIL', receiver: email, amount: { value, currency: currency_code }, note: String(note).slice(0, 200), sender_item_id: batchId }],
+    },
+  });
+  return { batch_id: d?.batch_header?.payout_batch_id ?? null, status: d?.batch_header?.batch_status ?? null };
+}
+
 export async function getOrder(orderId) {
   return call('GET', `/v2/checkout/orders/${orderId}`);
 }

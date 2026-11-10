@@ -36,8 +36,7 @@ const txt = (p) => p.evaluate(() => document.body.innerText);
   ok('03 review shows approve disabled with gaps', await F.isDisabled('#approveSend'));
   for (let i = 0; i < 6; i++) { const g = F.locator('.mp-gap .mp-btn--secondary').first(); if (!(await g.count())) break; await g.click(); await F.waitForTimeout(300); }
   await F.click('#approveSend'); await F.getByRole('button', { name: /Lock and send/ }).click();
-  await F.waitForSelector('#makeInvite'); await F.click('#makeInvite');
-  await F.waitForSelector('input[aria-label="Invite link"]'); const invite = await F.inputValue('input[aria-label="Invite link"]');
+  await F.waitForSelector('#inviteUrl'); const invite = await F.inputValue('#inviteUrl');
   ok('03 invite link created', /\/invite\//.test(invite)); await shot(F, 'sent-invite');
   // client (phone) via link
   const Cx = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
@@ -61,7 +60,7 @@ const txt = (p) => p.evaluate(() => document.body.innerText);
     const h = { 'content-type': 'application/json' };
     const o = await (await fetch(`/api/milestones/${m.id}/order`, { method: 'POST', headers: h, body: '{}' })).json();
     await fetch(`/api/milestones/${m.id}/authorize`, { method: 'POST', headers: h, body: JSON.stringify({ order_id: o.order_id }) }); return m.id; }, pid);
-  await C.reload(); await C.waitForSelector('text=PayPal is holding this'); await shot(C, 'client-funded');
+  await C.reload(); await C.waitForSelector('text=Milestone Pay is holding this'); await shot(C, 'client-funded');
   // freelancer: project page → milestone page → upload → deliver
   await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('text=Payment history'); await shot(F, 'project-page');
   await F.goto(`${base}/#/p/${pid}/m/${m1}`); await F.waitForSelector('#markDelivered');

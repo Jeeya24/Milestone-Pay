@@ -1,8 +1,54 @@
-// 10 Account settings: profile or business details, PayPal, role, account. No password: PayPal handles sign-in.
-import { S, el, icon, api, mount, appShell, pageHead, alertBox, errBox, toast, tagPicker, homeRole, myName, switchRole, logout, initial } from './core.js';
+// 10 Account settings: profile or business details (with a picture), PayPal, role, account. No password: PayPal handles sign-in.
+import { S, el, icon, api, go as goTo, mount, appShell, pageHead, alertBox, errBox, toast, tagPicker, homeRole, myName, switchRole, logout, initial, avatar, confirmDialog } from './core.js';
+import { OTHER } from './onboarding.js';
 
 const SKILLS = ['Web design', 'Branding', 'Illustration', 'Photography', 'Copywriting', 'Development', 'Video'];
-const HIRE = ['Website', 'Logo & branding', 'Photos', 'Social media', 'Writing', 'Something else'];
+const HIRE = ['Website', 'Logo & branding', 'Photos', 'Social media', 'Writing'];
+
+/** Shrink a chosen photo to a 256px square JPEG in the browser, so the upload is small. */
+function squareJpeg(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    const bad = () => reject(new Error('Couldn’t read that picture. Try a .jpg or .png file.'));
+    img.onload = () => {
+      const s = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement('canvas'); c.width = size; c.height = size;
+      c.getContext('2d').drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      c.toBlob((b) => (b ? resolve(b) : bad()), 'image/jpeg', 0.86);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); bad(); };
+    img.src = url;
+  });
+}
+
+function pictureField() {
+  const err = el('div');
+  const label = () => [icon('camera'), S.me.avatar_url ? 'Change picture' : 'Upload a picture'];
+  const picker = el('input', { type: 'file', accept: '.jpg,.jpeg,.png,image/jpeg,image/png', hidden: true, id: 'avatarFile', onchange: async () => {
+    const f = picker.files[0]; picker.value = '';
+    if (!f) return;
+    err.replaceChildren();
+    if (!/\.(jpe?g|png)$/i.test(f.name) && !/^image\/(jpeg|png)$/.test(f.type)) return err.replaceChildren(errBox(new Error('Choose a .jpg or .png picture.')));
+    if (f.size > 15 * 1024 * 1024) return err.replaceChildren(errBox(new Error('That picture is over 15 MB. Choose a smaller one.')));
+    choose.disabled = true; choose.replaceChildren(el('span', { class: 'mp-spinner', style: 'width:16px;height:16px' }), 'Uploading…');
+    try {
+      const fd = new FormData(); fd.append('avatar', await squareJpeg(f), 'avatar.jpg');
+      S.me = (await api('/api/me/avatar', { form: fd })).user;
+      toast('Profile picture updated');
+      viewSettings();
+    } catch (e) { choose.disabled = false; choose.replaceChildren(...label()); err.replaceChildren(errBox(e)); }
+  } });
+  const choose = el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', type: 'button', id: 'avatarChoose', onclick: () => picker.click() }, ...label());
+  const remove = S.me.avatar_url ? el('button', { class: 'mp-btn mp-btn--ghost mp-btn--sm', type: 'button', id: 'avatarRemove', onclick: async () => {
+    try { S.me = (await api('/api/me/avatar', { method: 'DELETE' })).user; toast('Profile picture removed'); viewSettings(); } catch (e) { err.replaceChildren(errBox(e)); }
+  } }, 'Remove') : null;
+  return el('div', { class: 'mp-field' }, el('span', { class: 'mp-label' }, 'Profile picture'),
+    el('div', { class: 'mp-row mp-avatarfield' }, avatar(myName(), S.me.avatar_url, `mp-avatar--xl ${homeRole() === 'client' ? '' : 'mp-avatar--me'}`),
+      el('div', { class: 'mp-stack', style: 'gap:6px' }, el('div', { class: 'mp-row mp-row--wrap' }, choose, remove), el('span', { class: 'mp-help' }, 'A .jpg or .png. We crop it to a square.'))),
+    picker, err);
+}
 
 export function viewSettings() {
   const role = homeRole();
@@ -10,8 +56,8 @@ export function viewSettings() {
   const isClient = role === 'client';
   let type = S.me.client_type || 'business';
   const name = el('input', { class: 'mp-input', id: 'setName', maxlength: 60, value: S.me.display_name || S.me.name || '' });
-  const tags = tagPicker(isClient ? HIRE : SKILLS, isClient ? S.me.hire_for : S.me.skills, { allowAdd: !isClient, addLabel: 'Add a skill and press Enter' });
-  const bio = el('textarea', { class: 'mp-input', id: 'setBio', rows: 2, maxlength: 160 }, S.me.bio || '');
+  const tags = isClient ? tagPicker(HIRE, S.me.hire_for, { other: OTHER, addLabel: 'Type what you hire for' }) : tagPicker(SKILLS, S.me.skills, { allowAdd: true, addLabel: 'Add a skill' });
+  const bio = el('textarea', { class: 'mp-input', id: 'setBio', rows: 2, maxlength: 160, placeholder: isClient ? 'A small café in Ari, Bangkok.' : 'Bangkok-based designer for cafés and small shops.' }, S.me.bio || '');
   const count = el('span', { class: 'mp-t-caption mp-muted' }, `${(S.me.bio || '').length} / 160`);
   bio.addEventListener('input', () => { count.textContent = `${bio.value.length} / 160`; });
   const seg = el('div', { class: 'mp-seg', role: 'radiogroup', 'aria-label': 'Hiring as' });
@@ -21,10 +67,25 @@ export function viewSettings() {
   const err = el('div');
   const save = el('button', { class: 'mp-btn mp-btn--primary', id: 'saveProfile', onclick: async () => {
     err.replaceChildren(); save.disabled = true;
-    const body = isClient ? { display_name: name.value.trim(), client_type: type, hire_for: tags.values() } : { display_name: name.value.trim(), skills: tags.values(), bio: bio.value.trim() };
-    try { S.me = (await api('/api/me', { method: 'PATCH', body })).user; toast(isClient ? 'Details saved. Freelancers see them on your next agreement.' : 'Profile saved. Clients see the new details on your next agreement.'); viewSettings(); }
+    const body = isClient ? { display_name: name.value.trim(), client_type: type, hire_for: tags.values(), bio: bio.value.trim() } : { display_name: name.value.trim(), skills: tags.values(), bio: bio.value.trim() };
+    try { S.me = (await api('/api/me', { method: 'PATCH', body })).user; toast(isClient ? 'Details saved. Freelancers you work with can see them.' : 'Profile saved. Your clients can see it.'); viewSettings(); }
     catch (e) { save.disabled = false; err.append(errBox(e)); }
   } }, 'Save changes');
+  const delErr = el('div');
+  const del = el('button', { class: 'mp-btn mp-btn--danger-quiet', id: 'deleteAccount', type: 'button', onclick: async () => {
+    const ok = await confirmDialog({ icon: 'trash', iconKind: 'issue', title: 'Delete your account?',
+      text: 'You’ll be logged out now. After 15 days we delete your profile, your projects and their files for good. If you log in again before then, the deletion stops and everything stays as it is.',
+      rows: [['Logged out', 'Right away'], ['Data deleted', 'After 15 days'], ['To cancel', 'Log in within 15 days']],
+      confirm: 'Keep my account', cancel: 'Delete my account', cancelClass: 'mp-btn--danger' });
+    if (ok !== false) return; // only the red button deletes
+    del.disabled = true; delErr.replaceChildren();
+    try {
+      const r = await api('/api/me', { method: 'DELETE' });
+      try { sessionStorage.setItem('mp_delete_on', r.scheduled_for); } catch { /* private mode */ }
+      S.me = null; S.projects = null;
+      goTo('/account-deleted');
+    } catch (e) { del.disabled = false; delErr.replaceChildren(errBox(e)); }
+  } }, icon('trash'), 'Delete account');
   const other = isClient ? 'freelancer' : 'client';
   const card = (id, title, sub, ...kids) => el('section', { class: 'mp-card mp-card--raised mp-stack mp-stack--4', id }, el('div', {}, el('h2', { class: 'mp-t-section' }, title), sub ? el('p', { class: 'mp-t-sm mp-muted' }, sub) : null), ...kids);
   const go = (id) => (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
@@ -36,16 +97,18 @@ export function viewSettings() {
         el('a', { href: '#set-role', onclick: go('set-role') }, icon('briefcase'), 'Role'),
         el('a', { href: '#set-account', onclick: go('set-account') }, icon('lock'), 'Account')),
       el('div', { class: 'mp-stack mp-stack--6' },
-        card('set-profile', isClient ? 'Business details' : 'Profile', isClient ? 'Freelancers see this on agreements you approve.' : 'Clients see this on agreements you send.',
+        card('set-profile', isClient ? 'Business details' : 'Profile', isClient ? 'Freelancers you work with see this on your profile.' : 'Your clients see this on your profile.',
+          pictureField(),
           isClient ? el('div', { class: 'mp-field' }, el('span', { class: 'mp-label' }, 'Hiring as'), seg) : null,
           el('div', { class: 'mp-field' }, nameLabel, name),
-          el('div', { class: 'mp-field' }, el('span', { class: 'mp-label' }, isClient ? 'What you usually hire for' : 'What you do'), tags.node),
-          isClient ? null : el('div', { class: 'mp-field' }, el('div', { class: 'mp-label-row' }, el('label', { class: 'mp-label', for: 'setBio' }, 'Short bio', el('span', { class: 'mp-opt' }, '(optional)')), count), bio),
+          el('div', { class: 'mp-field' }, el('span', { class: 'mp-label' }, isClient ? 'What you usually hire for' : 'What you do'),
+            isClient ? el('span', { class: 'mp-help' }, 'Pick any, or choose “Something else” and type your own.') : null, tags.node),
+          el('div', { class: 'mp-field' }, el('div', { class: 'mp-label-row' }, el('label', { class: 'mp-label', for: 'setBio' }, isClient ? 'About you or your business' : 'Short bio', el('span', { class: 'mp-opt' }, '(optional)')), count), bio),
           el('div', {}, save), err),
         card('set-paypal', 'PayPal', isClient ? 'The account you fund milestones from.' : 'Where clients’ payments are sent when they approve your work.',
           alertBox('success', 'check', el('b', {}, 'Signed in with PayPal'), S.me.email ? ` · ${S.me.email}` : '', el('div', {}, isClient ? 'You log in and pay with this account.' : 'You log in and get paid with this account.')),
           el('span', { class: 'mp-trust', style: 'justify-content:flex-start' }, icon('lock'), 'We never see your PayPal password, card or bank details. To use a different PayPal account, log out and continue with that one.'),
-          alertBox('info', 'info', 'Sandbox beta: payments go to the Milestone Pay demo merchant, not your own PayPal yet.')),
+          alertBox('info', 'info', isClient ? 'Sandbox beta: fake money. Milestone Pay holds what you fund and releases it when you approve the work.' : 'Sandbox beta: fake money. Milestone Pay holds each payment and sends it to this PayPal account when your client approves the work.')),
         card('set-role', 'Role', `You use Milestone Pay as a ${isClient ? 'client' : 'freelancer'}${roles.has(other) ? ` and a ${other}` : ''}.`,
           el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, roles.has(other) ? `Switch to ${other === 'client' ? 'Your jobs' : 'Projects'}` : other === 'client' ? 'Hire people too?' : 'Freelance too?'),
             el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, roles.has(other) ? 'You can also switch from the menu in the top bar.' : `Add the ${other} role, then switch between them from the menu in the top bar.`)),
@@ -54,6 +117,8 @@ export function viewSettings() {
           el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Email'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${S.me.email || 'Not shared'} · from PayPal`)),
             el('span', { class: 'mp-ok' }, icon('check'), 'Verified by PayPal')),
           el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Log out'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'On this device. Your jobs and payments stay as they are.')),
-            el('button', { class: 'mp-btn mp-btn--secondary', id: 'logoutBtn', onclick: logout }, icon('arrow-right'), 'Log out')))))));
+            el('button', { class: 'mp-btn mp-btn--secondary', id: 'logoutBtn', onclick: logout }, icon('arrow-right'), 'Log out')),
+          el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Delete account'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'Your data is deleted after 15 days. Log in before then to keep your account.')),
+            del), delErr)))));
 }
 export { initial, myName };

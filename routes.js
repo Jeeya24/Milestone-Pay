@@ -169,6 +169,7 @@ function paymentView(p) {
   return p ? {
     order_id: p.order_id, authorization_id: p.authorization_id || null, expires_at: p.expires_at || null,
     capture_id: p.capture_id || null, status: p.status,
+    payout_status: p.payout_status || null, payout_batch_id: p.payout_batch_id || null,
   } : null;
 }
 
@@ -235,12 +236,12 @@ export function invitePreview(token) {
   const i = typeof token === 'string' && token ? D().invites.find((x) => x.token_hash === sha(token)) : null;
   const p = i && D().projects.find((x) => x.id === i.project_id);
   if (!p) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
-  if (i.used_by || i.revoked) throw E('INVITE_USED', 'This invite link was already used. Ask the freelancer for a new one.', 409);
-  if (Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
+  if (i.revoked) throw E('INVITE_USED', 'This invite link was replaced. Ask the freelancer for the current one.', 409);
+  if (i.expires_at && Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
   const a = agreementOf(p.id);
   const ms = milestonesOf(p.id);
   return {
-    project: { id: p.id, title: a?.body?.title ?? p.title ?? null },
+    project: { id: p.id, title: p.title ?? a?.body?.title ?? null },
     freelancer: { name: memberName(p.id, 'freelancer') ?? p.freelancer_name ?? null },
     total_minor: ms.reduce((t, m) => t + m.amount_minor, 0), currency: a?.body?.currency ?? ms[0]?.currency ?? null, parts: ms.length,
   };
@@ -256,6 +257,64 @@ const ProfileBody = z.object({
   hire_for: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   finish: z.boolean().optional(),
 }).strict();
+const avatarUrl = (u) => (u?.avatar?.data ? `/api/users/${u.id}/avatar?v=${Date.parse(u.avatar.at) || 0}` : null);
+const MilestoneBody = z.object({
+  amount_minor: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
+  title: z.string().trim().min(1).max(120).optional(),
+  criteria: z.array(z.string().trim().min(1).max(200)).max(12).optional(),
+}); // unknown keys (status, ids...) are dropped, never applied
+const MAX_MILESTONES = 12;
+const DELETE_AFTER_DAYS = 15;
+
+/** Remove projects with every row and uploaded file that belongs to them. */
+function removeProjects(ids) {
+  if (!ids.size) return;
+  const d = D();
+  const ags = new Set(d.agreements.filter((a) => ids.has(a.project_id)).map((a) => a.id));
+  const ms = new Set(d.milestones.filter((m) => ids.has(m.project_id)).map((m) => m.id));
+  for (const c of db.COLLECTIONS) {
+    if (c === 'users' || c === 'ai_runs' || c === 'sessions') continue;
+    d[c] = d[c].filter((row) => !((c === 'projects' && ids.has(row.id)) || ids.has(row.project_id) || ags.has(row.agreement_id) || ms.has(row.milestone_id)));
+  }
+  db.save();
+  for (const pid of ids) fs.rmSync(path.join(uploadsRoot(), pid), { recursive: true, force: true });
+}
+
+const hasHolds = (uid) => {
+  const d = D();
+  const mine = new Set(d.project_members.filter((m) => m.user_id === uid).map((m) => m.project_id));
+  return d.milestones.some((m) => mine.has(m.project_id) && VOIDABLE_STATES.includes(m.status));
+};
+
+/** Erase a user for good: their freelance projects (rows and files), memberships, sessions and profile. */
+export function purgeUser(uid) {
+  const d = D();
+  const u = d.users.find((x) => x.id === uid);
+  if (!u) return 0;
+  const own = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'freelancer').map((m) => m.project_id));
+  removeProjects(own);
+  d.sessions = d.sessions.filter((s) => s.user_id !== uid);
+  d.project_members = d.project_members.filter((m) => m.user_id !== uid);
+  for (const k of Object.keys(u)) if (!['id', 'created_at'].includes(k)) delete u[k];
+  Object.assign(u, { deleted_at: now(), email: null, name: null, paypal_user_id: null });
+  db.save();
+  return own.size;
+}
+
+/**
+ * Erase every account whose 15-day wait is over. Logging in during the wait cancels it (auth.js).
+ * An account with money on hold waits until the hold is settled. Returns how many were erased.
+ */
+export function purgeDueAccounts(at = Date.now()) {
+  let n = 0;
+  for (const u of [...D().users]) {
+    if (u.deleted_at || !u.delete_after || Date.parse(u.delete_after) > at || hasHolds(u.id)) continue;
+    purgeUser(u.id);
+    n++;
+  }
+  return n;
+}
+
 const lastPaymentOf = (mid) => [...D().payments].reverse().find((p) => p.milestone_id === mid) ?? null;
 const money = (minor, cur) => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(minor / 100);
 
@@ -350,7 +409,9 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   // ---- Step 1: dashboard ---------------------------------------------------
   r.get('/projects', (req, res) => {
     const d = D();
-    const myRole = new Map(d.project_members.filter((m) => m.user_id === req.user.id).map((m) => [m.project_id, m.role]));
+    const myRows = d.project_members.filter((m) => m.user_id === req.user.id);
+    const myRole = new Map(myRows.map((m) => [m.project_id, m.role]));
+    const archived = new Set(myRows.filter((m) => m.archived_at).map((m) => m.project_id));
     const projects = d.projects.filter((p) => p.source !== 'lab' && myRole.has(p.id));
     const ids = new Set(projects.filter((p) => myRole.get(p.id) === 'freelancer').map((p) => p.id)); // totals: my freelance work
     const latest = new Map(); // milestone_id -> latest ledger event
@@ -376,7 +437,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         const cur = ms.find((m) => m.status !== 'paid');
         const last = d.activity.filter((x) => x.project_id === p.id).at(-1);
         return {
-          id: p.id, my_role: myRole.get(p.id), is_demo: v.is_demo, title: v.title,
+          id: p.id, my_role: myRole.get(p.id), is_demo: v.is_demo, title: v.title, archived: archived.has(p.id),
           freelancer: memberName(p.id, 'freelancer') ?? v.freelancer, client: memberName(p.id, 'client') ?? v.client,
           total_minor: ms.reduce((s, m) => s + m.amount_minor, 0), status: v.status,
           currency: a?.body?.currency ?? ms[0]?.currency ?? null, deadline: termOf(a, 'deadline'),
@@ -526,14 +587,96 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   r.patch('/milestones/:id', need('milestone', 'freelancer'), (req, res) => {
     const m = getMilestone(req.params.id);
     const a = agreementOf(m.project_id);
-    if (isFrozen(a) || m.status !== 'draft') throw E('AGREEMENT_FROZEN', 'Amounts cannot change after the freelancer approves.', 409);
-    const v = req.body?.amount_minor;
-    if (!Number.isSafeInteger(v) || v < 0) throw E('BAD_AMOUNT', 'amount_minor must be a non-negative integer (cents).');
-    m.amount_minor = v;
+    if (isFrozen(a) || m.status !== 'draft') throw E('AGREEMENT_FROZEN', 'Milestones cannot change after the freelancer approves.', 409);
+    const raw = req.body || {};
+    if (raw.amount_minor !== undefined && (!Number.isSafeInteger(raw.amount_minor) || raw.amount_minor < 0)) {
+      throw E('BAD_AMOUNT', 'amount_minor must be a non-negative integer (cents).');
+    }
+    const parsed = MilestoneBody.safeParse(raw);
+    if (!parsed.success || !Object.keys(parsed.data).length) {
+      const f = parsed.success ? null : parsed.error.issues[0]?.path?.[0];
+      throw E('BAD_MILESTONE', f === 'title' ? 'Give the milestone a title (up to 120 characters).'
+        : f === 'criteria' ? 'Use up to 12 lines, each up to 200 characters.' : 'Send a title, criteria or amount_minor to change.');
+    }
+    const b = parsed.data;
+    if (b.amount_minor !== undefined) m.amount_minor = b.amount_minor;
+    if (b.title !== undefined) m.title = b.title;
+    if (b.criteria !== undefined) m.criteria = b.criteria;
     db.save();
     const sum = milestonesOf(m.project_id).reduce((s, x) => s + x.amount_minor, 0);
     const total = a?.body.total_minor ?? sum;
     res.json({ milestone: milestoneView(m), sum_minor: sum, agreed_total_minor: total, mismatch: sum !== total });
+  });
+
+  // Add or remove a milestone while the agreement is still a draft. Labels stay M1..Mn in order.
+  const relabel = (pid) => milestonesOf(pid).forEach((m, i) => { m.seq = i + 1; m.label = `M${i + 1}`; });
+
+  r.post('/agreements/:id/milestones', need('agreement', 'freelancer'), (req, res) => {
+    const a = getAgreement(req.params.id);
+    if (isFrozen(a)) throw E('AGREEMENT_FROZEN', 'Milestones cannot change after the freelancer approves.', 409);
+    const ms = milestonesOf(a.project_id);
+    if (ms.length >= MAX_MILESTONES) throw E('TOO_MANY_MILESTONES', `An agreement can have up to ${MAX_MILESTONES} milestones.`, 409);
+    const last = ms[ms.length - 1];
+    const title = (typeof req.body?.title === 'string' ? req.body.title : '').trim().slice(0, 120) || 'New milestone';
+    const start = last?.end_day ?? 0;
+    D().milestones.push({
+      id: db.id('ms'), project_id: a.project_id, agreement_id: a.id, label: `M${ms.length + 1}`, seq: (last?.seq ?? 0) + 1,
+      title, amount_minor: 0, currency: last?.currency || a.body.currency, status: 'draft', criteria: [],
+      rev_count: 0, rev_limit: last?.rev_limit ?? null, rev_note: null, start_day: start, end_day: start + 3,
+    });
+    relabel(a.project_id);
+    db.save();
+    res.status(201).json({ milestones: milestonesOf(a.project_id).map(milestoneView) });
+  });
+
+  r.delete('/milestones/:id', need('milestone', 'freelancer'), (req, res) => {
+    const m = getMilestone(req.params.id);
+    const a = agreementOf(m.project_id);
+    if (isFrozen(a) || m.status !== 'draft') throw E('AGREEMENT_FROZEN', 'Milestones cannot change after the freelancer approves.', 409);
+    if (milestonesOf(m.project_id).length <= 1) throw E('LAST_MILESTONE', 'An agreement needs at least one milestone.', 409);
+    const d = D();
+    d.milestones = d.milestones.filter((x) => x.id !== m.id);
+    relabel(m.project_id);
+    db.save();
+    res.json({ milestones: milestonesOf(m.project_id).map(milestoneView) });
+  });
+
+  // ---- Project title, archive, delete --------------------------------------
+  // The title is a display name. While the agreement is a draft it is also the agreement's title;
+  // once version 1 is locked the agreement text stays as approved and only the project name changes.
+  r.patch('/projects/:id', need('project', 'freelancer'), (req, res) => {
+    const p = getProject(req.params.id);
+    const title = (typeof req.body?.title === 'string' ? req.body.title : '').trim();
+    if (!title || title.length > 80) throw E('BAD_TITLE', 'Give the project a title (up to 80 characters).');
+    p.title = title;
+    const a = agreementOf(p.id);
+    if (a && !isFrozen(a)) a.body.title = title;
+    db.save();
+    res.json({ project: projectView(p) });
+  });
+
+  // Archiving hides a project from the member's own list; the other person still sees it.
+  r.post('/projects/:id/archive', need('project'), (req, res) => {
+    if (typeof req.body?.archived !== 'boolean') throw E('BAD_REQUEST', 'archived must be true or false.');
+    const row = D().project_members.find((m) => m.project_id === req.projectId && m.user_id === req.user.id);
+    if (!row) throw E('NOT_FOUND', 'Project not found', 404);
+    if (req.body.archived) row.archived_at = row.archived_at || now(); else delete row.archived_at;
+    db.save();
+    res.json({ id: req.projectId, archived: !!row.archived_at });
+  });
+
+  // Deleting erases the project for both people, so it is refused once money is on hold or has been paid.
+  r.delete('/projects/:id', need('project', 'freelancer'), (req, res) => {
+    const p = getProject(req.params.id);
+    const ms = milestonesOf(p.id);
+    if (ms.some((m) => VOIDABLE_STATES.includes(m.status))) {
+      throw E('ACTIVE_HOLDS', 'Money is on hold in this project. Finish or cancel that milestone first.', 409);
+    }
+    if (ms.some((m) => m.status === 'paid' || m.status === 'refunded')) {
+      throw E('HAS_PAYMENTS', 'This project has payments, so its record is kept. Archive it instead.', 409);
+    }
+    removeProjects(new Set([p.id]));
+    res.json({ ok: true });
   });
 
   // ---- Step 4: approve agreement ------------------------------------------
@@ -663,8 +806,8 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'AUTHORIZED',
         paypal_id: a.authorization_id, amount_minor: m.amount_minor,
       });
-      db.activity(m.project_id, 'pp', `${m.label} ${money(m.amount_minor, m.currency)} is held by PayPal (authorization ${a.authorization_id})`);
-      db.notify(m.project_id, 'freelancer', `${m.label} is funded. ${money(m.amount_minor, m.currency)} is held by PayPal, so you can start "${m.title}".`);
+      db.activity(m.project_id, 'pp', `${m.label} ${money(m.amount_minor, m.currency)} is held by Milestone Pay (PayPal authorization ${a.authorization_id})`);
+      db.notify(m.project_id, 'freelancer', `${m.label} is funded. ${money(m.amount_minor, m.currency)} is held by Milestone Pay, so you can start "${m.title}".`);
       return { milestone: milestoneView(m), payment: paymentView(pay) };
     });
     res.json(payload);
@@ -767,7 +910,25 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const round = m.rev_limit != null ? `round ${m.rev_count} of ${m.rev_limit}` : `round ${m.rev_count}`;
     db.activity(m.project_id, 'client', `${m.label}: revision requested (${round})`);
     db.notify(m.project_id, 'freelancer', `Revision requested on ${m.label} (${round})`);
+    // The request opens the project chat (or adds to it) so the two can talk the changes through.
+    const proj = D().projects.find((x) => x.id === m.project_id);
+    (proj.chat ||= []).push({ id: db.id('msg'), from: 'client', kind: 'revision', milestone_id: m.id, label: m.label, text: note, at: now() });
+    db.save();
     res.json({ milestone: milestoneView(m) });
+  });
+
+  // ---- Project chat (opens with the first revision request) ---------------
+  // Untrusted text between the two people. Never sent to the agent or any model.
+  r.post('/projects/:id/chat', need('project'), (req, res) => {
+    const p = getProject(req.params.id);
+    const text = (typeof req.body?.text === 'string' ? req.body.text : '').trim().slice(0, 1000);
+    if (!text) throw E('MESSAGE_TOO_SHORT', 'Write a message first.');
+    if (!Array.isArray(p.chat)) throw E('CHAT_NOT_OPEN', 'The chat opens when the client asks for a revision.', 409);
+    if (p.chat.length >= 500) throw E('CHAT_FULL', 'This chat is full.', 409);
+    const message = { id: db.id('msg'), from: req.role, kind: 'message', text, at: now() };
+    p.chat.push(message);
+    db.save();
+    res.status(201).json({ message, chat: p.chat });
   });
 
   // ---- Step 7 (cont.): proposals, agent ------------------------------------
@@ -1026,6 +1187,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       const cap = pu?.captures?.[0];
       payments.push({ milestone_id: m.id, order_status: o?.status ?? null, authorization_status: auth?.status ?? null, capture_status: cap?.status ?? null });
       if (lastPaymentOf(m.id)?.id !== pay.id) continue; // only the latest attempt drives the milestone
+      if (pay.payout_status === 'FAILED') await agent.payoutFor?.(m.id, { paypal }); // retry sending a captured payment on
       try {
         if (cap?.status === 'COMPLETED' && m.status === 'submitted') {
           db.transition(m, 'paid');
@@ -1054,52 +1216,57 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   });
 
   // ---- Client invites ------------------------------------------------------
-  // A freelancer shares a link; the client logs in with PayPal and accepts it. One live invite per project.
-  const INVITE_DAYS = 7;
+  // One lasting link per project. The freelancer can copy it again at any time and the client can open it
+  // as often as they like; the first person to accept it becomes the client, and after that it only opens for them.
   const sha256 = (v) => crypto.createHash('sha256').update(v).digest('hex');
   const appBase = (req) => config.appUrl || `${req.protocol}://${req.get('host')}`;
 
   r.post('/projects/:id/invites', need('project', 'freelancer'), (req, res) => {
     const d = D();
-    for (const i of d.invites) if (i.project_id === req.projectId && !i.used_by && !i.revoked) i.revoked = true;
-    const token = crypto.randomBytes(32).toString('base64url');
-    d.invites.push({
-      id: db.id('inv'), project_id: req.projectId, token_hash: sha256(token), created_by: req.user.id, created_at: now(),
-      expires_at: new Date(Date.now() + INVITE_DAYS * 864e5).toISOString(), used_by: null, used_at: null, revoked: false,
-    });
-    db.save();
-    res.status(201).json({ url: `${appBase(req)}/invite/${token}` });
+    let inv = d.invites.find((i) => i.project_id === req.projectId && !i.revoked && i.token);
+    const created = !inv;
+    if (!inv) {
+      // Older single-use links stored only a hash, so they cannot be shown again: replace them.
+      for (const i of d.invites) if (i.project_id === req.projectId && !i.revoked) i.revoked = true;
+      const token = crypto.randomBytes(32).toString('base64url');
+      inv = {
+        id: db.id('inv'), project_id: req.projectId, token, token_hash: sha256(token), created_by: req.user.id, created_at: now(),
+        expires_at: null, used_by: null, used_at: null, revoked: false,
+      };
+      d.invites.push(inv);
+      db.save();
+    }
+    res.status(created ? 201 : 200).json({ url: `${appBase(req)}/invite/${inv.token}` });
   });
 
-  /** The invite for a raw token, or 404. Throws INVITE_USED / INVITE_EXPIRED unless this user already used it. */
-  function usableInvite(token, user) {
+  /** The invite for a raw token, or 404. A replaced link is INVITE_USED; an old dated link can be INVITE_EXPIRED. */
+  function usableInvite(token) {
     const i = typeof token === 'string' ? D().invites.find((x) => x.token_hash === sha256(token)) : null;
     if (!i || !D().projects.some((p) => p.id === i.project_id)) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
-    if (i.used_by === user.id) return i;
-    if (i.used_by || i.revoked) throw E('INVITE_USED', 'This invite link was already used. Ask the freelancer for a new one.', 409);
-    if (Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
+    if (i.revoked) throw E('INVITE_USED', 'This invite link was replaced. Ask the freelancer for the current one.', 409);
+    if (i.expires_at && Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
     return i;
   }
 
   r.get('/invites/:token', (req, res) => {
-    const i = usableInvite(req.params.token, req.user);
+    const i = usableInvite(req.params.token);
     const p = D().projects.find((x) => x.id === i.project_id);
     const f = memberWithRole(p.id, 'freelancer');
     const fname = displayName(D().users.find((u) => u.id === f?.user_id)) ?? p.freelancer_name ?? null;
     const a = agreementOf(p.id);
     const ms = milestonesOf(p.id);
-    res.json({ project: { id: p.id, title: a?.body?.title ?? p.title ?? null }, freelancer: { name: fname },
+    res.json({ project: { id: p.id, title: p.title ?? a?.body?.title ?? null }, freelancer: { name: fname },
       total_minor: ms.reduce((t, m) => t + m.amount_minor, 0), currency: a?.body?.currency ?? ms[0]?.currency ?? null, parts: ms.length });
   });
 
   r.post('/invites/:token/accept', (req, res) => {
-    const i = usableInvite(req.params.token, req.user);
+    const i = usableInvite(req.params.token);
     const role = roleOf(req.user.id, i.project_id);
     if (role === 'client') return res.json({ project_id: i.project_id });
     if (role === 'freelancer') throw E('SELF_INVITE', 'This is your own project. Send the link to your client instead.', 409);
-    if (memberWithRole(i.project_id, 'client')) throw E('CLIENT_TAKEN', 'This project already has a client.', 409);
+    if (memberWithRole(i.project_id, 'client')) throw E('CLIENT_TAKEN', 'This project already has a client. The link only opens for them now.', 409);
     D().project_members.push({ project_id: i.project_id, user_id: req.user.id, role: 'client', at: now() });
-    Object.assign(i, { used_by: req.user.id, used_at: now() });
+    Object.assign(i, { used_by: i.used_by || req.user.id, used_at: i.used_at || now() });
     db.save();
     db.activity(i.project_id, 'client', `${req.user.name || 'The client'} joined the project`);
     res.json({ project_id: i.project_id });
@@ -1179,29 +1346,75 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     zip.finalize();
   });
 
-  // ---- Account deletion (beta courtesy) ------------------------------------
-  // Refused while any of the user's freelance projects has money on hold; otherwise removes those projects with
-  // every row and file, the user's client memberships and sessions, and blanks the user row.
+  // ---- Profile picture and public profile ----------------------------------
+  // The picture is a small JPEG/PNG (the browser shrinks it first) kept on the user row, so it survives restarts.
+  const AVATAR_BYTES = 400 * 1024;
+  const avatarUploader = multer({ storage: multer.memoryStorage(), limits: { files: 1, fileSize: AVATAR_BYTES, fields: 2 } }).single('avatar');
+  const sharesProject = (a, b) => {
+    if (a === b) return true;
+    const mine = new Set(D().project_members.filter((m) => m.user_id === a).map((m) => m.project_id));
+    return D().project_members.some((m) => m.user_id === b && mine.has(m.project_id));
+  };
+  const knownUser = (req) => {
+    const u = D().users.find((x) => x.id === req.params.id && !x.deleted_at);
+    if (!u || !sharesProject(req.user.id, u.id)) throw E('NOT_FOUND', 'Not found', 404);
+    return u;
+  };
+
+  r.post('/me/avatar', async (req, res) => {
+    await new Promise((resolve, reject) => avatarUploader(req, res, (err) => {
+      if (!err) return resolve();
+      reject(err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE'
+        ? E('FILE_TOO_LARGE', 'That picture is too large. Use one under 400 KB.', 413) : E('BAD_FILE', 'Upload one picture as a .jpg or .png file.'));
+    }));
+    const b = req.file?.buffer;
+    const mime = b && startsWith(b, [0x89, 0x50, 0x4e, 0x47]) ? 'image/png' : b && startsWith(b, [0xff, 0xd8, 0xff]) ? 'image/jpeg' : null;
+    if (!mime) throw E('BAD_FILE', 'Upload one picture as a .jpg or .png file.');
+    const u = D().users.find((x) => x.id === req.user.id);
+    u.avatar = { mime, data: b.toString('base64'), at: now() };
+    db.save();
+    res.json({ user: userView(u) });
+  });
+
+  r.delete('/me/avatar', (req, res) => {
+    const u = D().users.find((x) => x.id === req.user.id);
+    delete u.avatar;
+    db.save();
+    res.json({ user: userView(u) });
+  });
+
+  r.get('/users/:id/avatar', (req, res) => {
+    const u = knownUser(req);
+    if (!u.avatar?.data) throw E('NOT_FOUND', 'Not found', 404);
+    res.set({ 'Content-Type': u.avatar.mime === 'image/png' ? 'image/png' : 'image/jpeg', 'Cache-Control': 'private, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+    res.send(Buffer.from(u.avatar.data, 'base64'));
+  });
+
+  // What the other person on a shared project may see. Never the email or PayPal id.
+  r.get('/users/:id', (req, res) => {
+    const u = knownUser(req);
+    const v = userView(u);
+    res.json({ profile: {
+      id: v.id, display_name: v.display_name || v.name, roles: v.roles, skills: v.skills, bio: v.bio,
+      client_type: v.client_type, hire_for: v.hire_for, avatar_url: v.avatar_url, member_since: v.created_at,
+    } });
+  });
+
+  // ---- Account deletion ----------------------------------------------------
+  // Deleting is a 15-day wait: the user is logged out everywhere and the data is erased when the wait ends
+  // (purgeDueAccounts). Logging in again before then cancels it. Refused while money is on hold.
   r.delete('/me', (req, res) => {
     const d = D();
     const uid = req.user.id;
-    const own = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'freelancer').map((m) => m.project_id));
-    const paying = new Set(d.project_members.filter((m) => m.user_id === uid && m.role === 'client').map((m) => m.project_id));
-    if (d.milestones.some((m) => (own.has(m.project_id) || paying.has(m.project_id)) && VOIDABLE_STATES.includes(m.status))) {
+    if (hasHolds(uid)) {
       throw E('ACTIVE_HOLDS', 'Money is on hold in one of your projects. Approve or cancel those milestones first.', 409);
     }
-    const ags = new Set(d.agreements.filter((a) => own.has(a.project_id)).map((a) => a.id));
-    const ms = new Set(d.milestones.filter((m) => own.has(m.project_id)).map((m) => m.id));
-    for (const c of db.COLLECTIONS) {
-      if (c === 'users' || c === 'ai_runs') continue;
-      d[c] = d[c].filter((row) => !(own.has(row.id) || own.has(row.project_id) || ags.has(row.agreement_id) || ms.has(row.milestone_id)
-        || (c === 'sessions' && row.user_id === uid) || (c === 'project_members' && row.user_id === uid)));
-    }
     const u = d.users.find((x) => x.id === uid);
-    Object.assign(u, { deleted_at: now(), email: null, name: null, paypal_user_id: null });
+    u.delete_requested_at = now();
+    u.delete_after = new Date(Date.now() + DELETE_AFTER_DAYS * 864e5).toISOString();
+    d.sessions = d.sessions.filter((x) => x.user_id !== uid);
     db.save();
-    for (const pid of own) fs.rmSync(path.join(uploadsRoot(), pid), { recursive: true, force: true });
-    res.json({ ok: true, deleted_projects: own.size });
+    res.json({ ok: true, scheduled_for: u.delete_after, days: DELETE_AFTER_DAYS });
   });
 
   // ---- Step 9: project page ------------------------------------------------
@@ -1216,6 +1429,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       agreement: agreementView(a),
       approvals: a ? d.approvals.filter((x) => x.agreement_id === a.id) : [],
       notes: a?.notes ?? [],
+      chat: Array.isArray(p.chat) ? p.chat : null,
       messages: projectMessages(p.id),
       milestones: milestonesOf(p.id).map(milestoneView),
       ledger: mine(d.ledger).filter((l) => l.event),
@@ -1229,7 +1443,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         return { calls: runs.length, cost_usd: runs.reduce((s, x) => s + (x.cost_usd || 0), 0) };
       })(),
       my_role: req.role,
-      members: membersOf(p.id).map((m) => ({ role: m.role, name: names.get(m.user_id) ?? null })),
+      members: membersOf(p.id).map((m) => ({ role: m.role, name: names.get(m.user_id) ?? null, user_id: m.user_id, avatar_url: avatarUrl(d.users.find((u) => u.id === m.user_id)) })),
     });
   });
 

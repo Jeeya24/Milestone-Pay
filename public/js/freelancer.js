@@ -3,7 +3,7 @@ import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, pageHead, alertBox, errBox, loading, skeleton, toast, confirmDialog,
   money, moneyEl, fmtNum, parseMinor, major, fmtDate, fmtDay, fmtTime, fmtDateTime, fmtSize, plural, initial,
   badge, msBadge, where, projectBadge, AGREEMENT_BADGE, nextStep, emptyState, stat, progress, msCard, fileRow, copyText,
-  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil,
+  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil, titleOf, editableTitle, chatCard, memberOf,
 } from './core.js';
 import { projectOverview } from './project.js';
 
@@ -13,15 +13,17 @@ export async function viewProjects() {
   let data;
   try { data = await api('/api/projects'); S.projects = data; }
   catch (e) { return mount(appShell('freelancer', pageHead('Your projects'), errBox(e), el('button', { class: 'mp-btn mp-btn--secondary', onclick: viewProjects }, 'Try again'))); }
-  const mine = data.projects.filter((p) => p.my_role === 'freelancer');
-  const cur = mine.find((p) => p.currency)?.currency || S.cfg?.currency;
+  const all = data.projects.filter((p) => p.my_role === 'freelancer');
+  const mine = all.filter((p) => !p.archived);
+  const archived = all.filter((p) => p.archived);
+  const cur = all.find((p) => p.currency)?.currency || S.cfg?.currency;
   const demoBtn = (cls) => el('button', { class: `mp-btn ${cls}`, onclick: async (ev) => {
     const b = ev.currentTarget; b.disabled = true; b.textContent = 'Setting up the example… about 10 s';
     try { const r = await api('/api/demo', { body: {} }); go(`/p/${r.project_id}`); }
     catch (e) { b.disabled = false; b.textContent = 'Load demo project'; b.closest('.mp-page')?.prepend(errBox(e)); }
   } }, 'Load demo project');
   const newBtn = link('/new', { class: 'mp-btn mp-btn--primary' }, icon('plus'), 'New project');
-  if (!mine.length) {
+  if (!all.length) {
     return mount(appShell('freelancer', pageHead('Your projects', null, el('span', { class: 'mp-hide-phone' })),
       emptyState({ ic: 'chat', title: 'No projects yet', text: 'Paste a LINE or WhatsApp chat where you agreed a job. We’ll turn it into an agreement with milestones.',
         actions: [link('/new', { class: 'mp-btn mp-btn--primary' }, 'Paste a chat'), demoBtn('mp-btn--secondary')] }),
@@ -42,18 +44,57 @@ export async function viewProjects() {
           p.milestones.length ? el('div', { class: 'mp-progress' }, el('div', { class: 'mp-progress__label' }, el('span', {}, el('b', {}, `${p.paid_count} of ${p.milestones.length}`), ' paid'),
             p.held_minor ? el('span', {}, `${fmtNum(p.held_minor)} held`) : null),
           el('div', { class: 'mp-progress__bar' }, p.milestones.map((m) => el('span', { class: `mp-progress__seg ${m.status === 'paid' ? 'mp-progress__seg--paid' : ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? 'mp-progress__seg--held' : ''}` })))) : null),
-        link(`/p/${p.id}`, { class: 'mp-btn mp-btn--secondary', 'aria-label': `Open ${p.title || 'project'}` }, 'Open', icon('arrow-right'))),
+        el('div', { class: 'mp-jobrow__actions' },
+          link(`/p/${p.id}`, { class: 'mp-btn mp-btn--secondary', 'aria-label': `Open ${p.title || 'project'}` }, 'Open', icon('arrow-right')),
+          projectActions(p, viewProjects))),
       cr ? el('div', { class: 'mp-jobrow__banner' }, icon('chat'), el('span', { class: 'mp-grow' }, el('b', {}, `${p.client || 'Your client'} requested a change. `), 'Check it against the agreement before you reply.'),
         link(`/p/${p.id}/changes`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, 'Review request')) : null);
   };
   mount(appShell('freelancer',
-    pageHead('Your projects', 'Held and paid amounts come straight from PayPal.', newBtn),
+    pageHead('Your projects', 'What’s held for you, what’s paid, and what still needs funding.', newBtn),
     el('div', { class: 'mp-grid-3' },
-      stat('lock', 'Held by PayPal', data.totals.held_minor, cur, 'Clients have funded this. You get it when they approve your work.'),
+      stat('lock', 'Held by Milestone Pay', data.totals.held_minor, cur, 'Clients have funded this. You get it when they approve your work.'),
       stat('check', 'Paid to you', data.totals.paid_minor, cur, 'Paid into your PayPal account.'),
       stat('circle-dashed', 'Not funded yet', data.totals.not_funded_minor, cur, 'Agreed or drafted, but the client hasn’t funded it.')),
-    el('div', { class: 'mp-stack mp-stack--4' }, mine.map(row)),
+    mine.length ? el('div', { class: 'mp-stack mp-stack--4' }, mine.map(row))
+      : el('p', { class: 'mp-muted' }, 'Every project is archived. Open the list below to bring one back, or start a new project.'),
+    archivedList(archived, row),
     el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, sandboxNote(), demoBtn('mp-btn--ghost mp-btn--sm'))));
+}
+/** Archived projects, folded away under the list. */
+export function archivedList(list, row) {
+  if (!list.length) return null;
+  return el('details', { class: 'mp-archived', id: 'archived' }, el('summary', { class: 'mp-t-sub' }, icon('archive'), `Archived · ${list.length}`),
+    el('div', { class: 'mp-stack mp-stack--4', style: 'margin-top:16px' }, list.map(row)));
+}
+/**
+ * Archive (either role, hides it from your own list) and Delete (freelancer, only while no money was held or paid).
+ * Both sit on every project row.
+ */
+export function projectActions(p, reload) {
+  const name = p.title || 'this project';
+  const archive = el('button', { class: 'mp-iconbtn', type: 'button', 'data-action': p.archived ? 'unarchive' : 'archive',
+    'aria-label': `${p.archived ? 'Unarchive' : 'Archive'} ${name}`, title: p.archived ? 'Unarchive' : 'Archive', onclick: async () => {
+      archive.disabled = true;
+      try { await api(`/api/projects/${p.id}/archive`, { body: { archived: !p.archived } }); toast(p.archived ? 'Moved back to your list' : 'Archived. Find it under Archived at the bottom of the list.', 'archive'); reload(); }
+      catch (e) { archive.disabled = false; toast(e.message, 'alert'); }
+    } }, icon(p.archived ? 'undo' : 'archive'));
+  const moneyMoved = p.paid_count > 0 || p.held_minor > 0;
+  const del = p.my_role !== 'freelancer' ? null : el('button', { class: 'mp-iconbtn mp-iconbtn--danger', type: 'button', 'data-action': 'delete', 'aria-label': `Delete ${name}`, title: 'Delete', onclick: async () => {
+    if (moneyMoved) {
+      const ok = await confirmDialog({ icon: 'archive', title: 'This project can’t be deleted', text: 'Money was held or paid on it, so its payment record is kept for you and your client. You can archive it to move it out of your list.',
+        confirm: p.archived ? 'OK' : 'Archive instead', cancel: p.archived ? null : 'Go back' });
+      if (ok && !p.archived) archive.click();
+      return;
+    }
+    const ok = await confirmDialog({ icon: 'trash', iconKind: 'issue', title: `Delete ${name}?`,
+      text: `This removes the chat, the agreement and its milestones for good${p.client ? `, for you and ${p.client}` : ''}. It can’t be undone. No money has moved on this project.`,
+      confirm: 'Keep project', cancel: 'Delete project', cancelClass: 'mp-btn--danger' });
+    if (ok !== false) return; // only the red button deletes
+    try { await api(`/api/projects/${p.id}`, { method: 'DELETE' }); toast('Project deleted', 'trash'); reload(); }
+    catch (e) { toast(e.message, 'alert'); }
+  } }, icon('trash'));
+  return el('div', { class: 'mp-row', style: 'gap:0' }, archive, del);
 }
 function msBadgeShort(m) {
   const map = { draft: ['neutral', 'edit', 'Draft'], agreed: ['neutral', 'circle-dashed', 'Not funded'], authorized: ['held', 'lock', 'Funded'], submitted: ['pending', 'inbox', 'Submitted'],
@@ -129,7 +170,7 @@ export function viewNew() {
     const timer = setInterval(() => { if (k < steps.length - 1) { k++; tick(); } }, 2500);
     mountKeep(appShell('freelancer', el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--4 mp-reading', role: 'status' },
       el('div', { class: 'mp-row' }, el('span', { class: 'mp-spinner' }), el('h1', { class: 'mp-t-section' }, 'Reading your chat…')),
-      el('p', { class: 'mp-muted' }, 'This takes about 10 to 20 seconds. You can stay on this page.'),
+      el('p', { class: 'mp-muted' }, 'This will take about 10 to 20 seconds.'),
       el('div', { class: 'mp-card', style: 'display:flex;flex-direction:column;gap:12px' }, stepEls))));
     try {
       if (!draft.pendingId) {
@@ -265,6 +306,7 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
       apWhy.replaceChildren(open || bad || small ? icon('alert') : '', why);
     }
   };
+  const redraw = (e) => drawAgreement({ fromProject, keep: true, err: e || null });
   const msList = milestones.map((m) => {
     const amt = frozen ? moneyEl(m.amount_minor, cur, 'sm') : el('input', { class: 'mp-input mp-input--amount', inputmode: 'decimal', value: major(m.amount_minor), 'aria-label': `${m.label} amount in ${cur}` });
     if (!frozen) amt.addEventListener('change', async () => {
@@ -273,19 +315,53 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
       try { const r = await api(`/api/milestones/${m.id}`, { method: 'PATCH', body: { amount_minor: v } }); m.amount_minor = r.milestone.amount_minor; amt.value = major(m.amount_minor); paintSum(); }
       catch (e) { toast(e.message, 'alert'); amt.value = major(m.amount_minor); }
     });
-    return el('div', { class: 'mp-ms mp-ms--edit' }, el('span', { class: 'mp-ms__idx' }, String(m.seq)),
-      el('div', {}, el('div', { class: 'mp-ms__title' }, `${m.label} · ${m.title}`), el('ul', { class: 'mp-ms__crit' }, (m.criteria || []).map((c) => el('li', {}, c)))),
-      el('div', { class: 'mp-ms__right' }, frozen ? amt : el('div', { class: 'mp-affix' }, amt, el('span', { class: 'mp-t-sm mp-muted' }, cur))));
+    if (frozen) {
+      return el('div', { class: 'mp-ms mp-ms--edit' }, el('span', { class: 'mp-ms__idx' }, String(m.seq)),
+        el('div', {}, el('div', { class: 'mp-ms__title' }, `${m.label} · ${m.title}`), el('ul', { class: 'mp-ms__crit' }, (m.criteria || []).map((c) => el('li', {}, c)))),
+        el('div', { class: 'mp-ms__right' }, amt));
+    }
+    // Draft: the AI's title and description can be rewritten before sending.
+    const saved = el('span', { class: 'mp-t-caption mp-muted', 'aria-live': 'polite' });
+    const patch = async (body, revert) => {
+      saved.textContent = 'Saving…';
+      try { const r = await api(`/api/milestones/${m.id}`, { method: 'PATCH', body }); Object.assign(m, { title: r.milestone.title, criteria: r.milestone.criteria }); saved.textContent = 'Saved'; }
+      catch (e) { saved.textContent = ''; toast(e.message, 'alert'); revert(); }
+    };
+    const title = el('input', { class: 'mp-input', id: `msTitle-${m.id}`, maxlength: 120, value: m.title, 'aria-label': `${m.label} title`,
+      onchange: () => { const v = title.value.trim(); if (!v) { toast('Give the milestone a title', 'alert'); title.value = m.title; return; } if (v !== m.title) patch({ title: v }, () => { title.value = m.title; }); } });
+    const lines = () => crit.value.split('\n').map((x) => x.trim()).filter(Boolean);
+    const crit = el('textarea', { class: 'mp-input mp-ms__desc', id: `msDesc-${m.id}`, rows: Math.max(3, (m.criteria || []).length + 1), 'aria-label': `What ${m.label} includes, one item per line`,
+      placeholder: 'What this milestone includes, one item per line', value: (m.criteria || []).join('\n'),
+      onchange: () => { const v = lines(); if (v.length > 12 || v.some((x) => x.length > 200)) { toast('Use up to 12 lines, each up to 200 characters', 'alert'); return; }
+        if (JSON.stringify(v) !== JSON.stringify(m.criteria || [])) patch({ criteria: v }, () => { crit.value = (m.criteria || []).join('\n'); }); } });
+    const remove = milestones.length > 1 ? el('button', { class: 'mp-iconbtn mp-iconbtn--danger', type: 'button', 'aria-label': `Remove ${m.label}`, title: `Remove ${m.label}`, onclick: async () => {
+      const ok = await confirmDialog({ icon: 'trash', iconKind: 'issue', title: `Remove ${m.label} · ${m.title}?`, text: 'The milestones after it move up one. You can still change the amounts before you send the agreement.',
+        confirm: `Keep ${m.label}`, cancel: `Remove ${m.label}`, cancelClass: 'mp-btn--danger' });
+      if (ok !== false) return;
+      try { const r = await api(`/api/milestones/${m.id}`, { method: 'DELETE' }); R.d.milestones = r.milestones; redraw(); } catch (e) { redraw(e); }
+    } }, icon('trash')) : null;
+    return el('div', { class: 'mp-ms mp-ms--edit mp-ms--draft', 'data-ms': m.label }, el('span', { class: 'mp-ms__idx' }, String(m.seq)),
+      el('div', { class: 'mp-stack', style: 'gap:8px;min-width:0' },
+        el('div', { class: 'mp-field' }, el('label', { class: 'mp-label', for: `msTitle-${m.id}` }, `${m.label} title`), title),
+        el('div', { class: 'mp-field' }, el('div', { class: 'mp-label-row' }, el('label', { class: 'mp-label', for: `msDesc-${m.id}` }, 'What it includes'), saved), crit,
+          el('span', { class: 'mp-help' }, 'One item per line. Your client checks the work against this list.'))),
+      el('div', { class: 'mp-ms__right' }, el('div', { class: 'mp-affix' }, amt, el('span', { class: 'mp-t-sm mp-muted' }, cur)), remove));
   });
+  const addMs = frozen || milestones.length >= 12 ? null : el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', type: 'button', id: 'addMilestone', onclick: async () => {
+    addMs.disabled = true;
+    try { const r = await api(`/api/agreements/${agreement.id}/milestones`, { body: {} }); R.d.milestones = r.milestones; redraw(); setTimeout(() => document.getElementById(`msTitle-${r.milestones.at(-1).id}`)?.select()); }
+    catch (e) { redraw(e); }
+  } }, icon('plus'), 'Add milestone');
   const msCardEl = el('div', { class: 'mp-card mp-card--raised' },
-    el('div', { class: 'mp-card__head' }, el('h2', { class: 'mp-t-section' }, 'Milestones'), totalEl),
+    el('div', { class: 'mp-card__head' }, el('h2', { class: 'mp-t-section' }, `Milestones · ${milestones.length}`), totalEl),
     el('div', { class: 'mp-stack mp-stack--3' }, msList.length ? msList : el('p', { class: 'mp-muted' }, 'No milestones found.')), mismatch,
-    frozen ? null : el('p', { class: 'mp-t-caption mp-muted', style: 'margin-top:12px;font-weight:400' }, 'AI split shown. You can change any amount before you send it.'));
+    frozen ? null : el('div', { class: 'mp-row mp-row--between mp-row--wrap', style: 'margin-top:12px' }, addMs,
+      el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'The AI drafted these. Change any title, description or amount, and add or remove milestones, before you send it.')));
   paintSum();
   apBtn?.addEventListener('click', async () => {
     const term = (k) => (b.terms || []).find((t) => t.key === k)?.value;
     const ok = await confirmDialog({ icon: 'lock', title: `Send version 1 to ${cname}?`, text: 'This locks the agreement. To change it later, you’d cancel it and send a new one.',
-      summary: { label: 'Total', minor: sum, cur }, rows: [['To', cname], ['Milestones', `${milestones.length} · ${milestones.map((m) => m.label).join(', ')}`], ['Deadline', term('deadline') || 'Not set'], ['Revisions', term('revisions') || 'Not set']],
+      summary: { label: 'Total', minor: milestones.reduce((a, m) => a + m.amount_minor, 0), cur }, rows: [['To', cname], ['Milestones', `${milestones.length} · ${milestones.map((m) => m.label).join(', ')}`], ['Deadline', term('deadline') || 'Not set'], ['Revisions', term('revisions') || 'Not set']],
       confirm: `Lock and send to ${cname}`, confirmIcon: 'send', cancel: 'Keep editing' });
     if (!ok) return;
     apBtn.disabled = true;
@@ -296,12 +372,15 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
   const sentArea = agreement.status === 'sent' ? el('div', { class: 'mp-stack mp-stack--4' },
     alertBox('success', 'check', el('b', {}, 'You approved version 1. '), (d.members || []).some((m) => m.role === 'client') ? `${cname} joined and is reviewing it.` : `Send ${cname} the link to review and approve it.`),
     inviteBox(d),
-    el('span', { class: 'mp-row mp-t-caption mp-muted', style: 'font-weight:400' }, icon('lock'), 'Version 1 is locked · ', el('details', { class: 'mp-inline-details' }, el('summary', { class: 'mp-link' }, 'Details'), el('code', { class: 'mp-ref' }, agreement.content_hash || ''))),
+    el('span', { class: 'mp-row mp-t-caption mp-muted', style: 'font-weight:400' }, icon('lock'), 'Version 1 is locked. Nobody can change it now.'),
     notesBox(d, 'freelancer')) : null;
   const shell = appShell('freelancer',
-    back(fromProject ? `/p/${project.id}` : '/projects', fromProject ? (b.title || 'Project') : 'Your projects'),
-    pageHead(agreement.status === 'draft' ? 'Review the agreement' : b.title || 'Agreement',
-      agreement.status === 'draft' ? `The AI drafted this from your chat. Check it, fix the gaps, then send it to ${cname}.` : `Version 1 · ${fname} and ${cname}`,
+    back(fromProject ? `/p/${project.id}` : '/projects', fromProject ? titleOf(d) : 'Your projects'),
+    el('div', { class: 'mp-row mp-row--between mp-row--top mp-row--wrap', style: 'gap:16px' },
+      el('div', { class: 'mp-stack', style: 'gap:4px;min-width:0' },
+        agreement.status === 'draft' ? el('span', { class: 'mp-t-caption mp-muted' }, 'Review the agreement') : null,
+        editableTitle(d, (x) => { R.d = x; redraw(); }),
+        el('p', { class: 'mp-muted' }, agreement.status === 'draft' ? `The AI drafted this from your chat. Check it, fix the gaps, then send it to ${cname}.` : `Version 1 · ${fname} and ${cname}`)),
       (AGREEMENT_BADGE[agreement.status] || AGREEMENT_BADGE.draft)()),
     err ? errBox(err) : null,
     el('div', { class: 'mp-review' }, el('div', { class: 'mp-review__chat' }, chatCard),
@@ -311,22 +390,30 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
   if (R.hl) setTimeout(() => highlight(R.hl));
 }
 
-/** Client invite link for the freelancer to share (the client signs in with PayPal from it). */
+/**
+ * The client's link, for the freelancer to copy. One lasting link per project: it can be copied again at any time,
+ * before and after the agreement is approved, and the client can open it as often as they like.
+ */
+const inviteUrls = new Map();
 export function inviteBox(d) {
-  const client = (d.members || []).find((m) => m.role === 'client');
-  const { cname } = names(d);
-  if (client) return alertBox('success', 'user', el('b', {}, `${client.name || cname} joined as the client.`), d.agreement?.status === 'approved' ? '' : ' They can approve from their account.');
+  const client = memberOf(d, 'client');
+  const { cname } = names(d); const pid = d.project.id;
+  const who = client?.name || cname;
   const box = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--3', id: 'inviteBox' });
-  const make = el('button', { class: 'mp-btn mp-btn--primary', id: 'makeInvite', onclick: async () => {
-    make.disabled = true;
-    try {
-      const { url } = await api(`/api/projects/${d.project.id}/invites`, { body: {} });
-      box.replaceChildren(el('b', { class: 'mp-t-sub' }, `Link for ${cname}`), el('p', { class: 'mp-t-sm mp-muted' }, `${cname} opens it, continues with PayPal and sees the agreement. It works once and expires in 7 days.`),
-        el('div', { class: 'mp-row mp-linkrow' }, el('input', { class: 'mp-input', readonly: true, value: url, 'aria-label': 'Invite link', onfocus: (e) => e.target.select() }),
-          el('button', { class: 'mp-btn mp-btn--secondary', onclick: () => copyText(url, 'Link') }, icon('link'), 'Copy link')));
-    } catch (e) { make.disabled = false; box.append(errBox(e)); }
-  } }, icon('link'), `Create link for ${cname}`);
-  box.append(el('b', { class: 'mp-t-sub' }, 'Your client'), el('p', { class: 'mp-t-sm mp-muted' }, `${cname} hasn’t joined yet. Create a link and send it on LINE or WhatsApp.`), el('div', {}, make));
+  const paint = (url, err) => box.replaceChildren(
+    el('b', { class: 'mp-t-sub mp-row' }, icon(client ? 'check' : 'link'), client ? `${who} joined as the client` : `Link for ${who}`),
+    el('p', { class: 'mp-t-sm mp-muted' }, client ? `This is the link you sent. Copy it again any time: ${who} can use it to get back to this project as often as they need.`
+      : `${who} opens it, continues with PayPal and sees the agreement. The link keeps working, so you can copy and send it again whenever you need to.`),
+    url ? el('div', { class: 'mp-row mp-linkrow' }, el('input', { class: 'mp-input', readonly: true, value: url, id: 'inviteUrl', 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
+      el('button', { class: 'mp-btn mp-btn--secondary', type: 'button', id: 'copyInvite', onclick: () => copyText(url, 'Link') }, icon('link'), 'Copy link'))
+      : err ? el('div', { class: 'mp-stack' }, errBox(err), el('div', {}, el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', type: 'button', onclick: load }, 'Try again')))
+        : loading('Getting the link…'));
+  async function load() {
+    paint(null);
+    try { const { url } = await api(`/api/projects/${pid}/invites`, { body: {} }); inviteUrls.set(pid, url); paint(url); }
+    catch (e) { paint(null, e); }
+  }
+  if (inviteUrls.has(pid)) paint(inviteUrls.get(pid)); else load();
   return box;
 }
 
@@ -401,13 +488,15 @@ function drawSubmit(d, m, keep = false) {
   let head;
   if (canWork) head = nextStep({ text: revising ? 'Upload the revised files, then send them back' : `Upload your files, then mark ${m.label} delivered`,
     sub: revising ? `The ${money(m.amount_minor, cur)} hold stays in place while you revise.` : `${cname} reviews the files against the list on the left.`, action: markBtn });
-  else if (m.status === 'submitted') head = nextStep({ ic: 'clock', text: `Waiting for ${cname} to review ${m.label}`, sub: 'You’ll see their answer here. The money stays held by PayPal.' });
-  else if (m.status === 'paid') head = alertBox('success', 'check', `${m.label} paid · `, el('b', {}, `${money(m.amount_minor, cur)}`), ' received.');
+  else if (m.status === 'submitted') head = nextStep({ ic: 'clock', text: `Waiting for ${cname} to review ${m.label}`, sub: 'You’ll see their answer here. The money stays held by Milestone Pay.' });
+  else if (m.status === 'paid') head = m.payment?.payout_status === 'FAILED'
+    ? alertBox('warn', 'clock', el('b', {}, `${cname} approved ${m.label}. `), `${money(m.amount_minor, cur)} is released, but sending it to your PayPal hasn’t gone through yet. Open the project page and press “Check with PayPal” to try again.`)
+    : alertBox('success', 'check', `${m.label} paid · `, el('b', {}, `${money(m.amount_minor, cur)}`), m.payment?.payout_status === 'SENT' ? ' sent to your PayPal.' : ' received.');
   else if (m.status === 'voided') head = alertBox('issue', 'x', el('b', {}, `${cname} cancelled ${m.label}. `), `The ${money(m.amount_minor, cur)} hold was cancelled and ${cname} wasn’t charged.`);
   else head = null;
   const notFunded = m.status === 'agreed' || m.status === 'draft';
   const body = notFunded
-    ? emptyState({ ic: 'clock', title: `${m.label} · ${m.title} isn’t funded yet`, text: m.fundable ? `We asked ${cname} to fund ${m.label} (${money(m.amount_minor, cur)}). Work starts once PayPal holds it. Milestones are funded one at a time.` : `It unlocks after the milestones before it are paid.` })
+    ? emptyState({ ic: 'clock', title: `${m.label} · ${m.title} isn’t funded yet`, text: m.fundable ? `We asked ${cname} to fund ${m.label} (${money(m.amount_minor, cur)}). Work starts once Milestone Pay holds it. Milestones are funded one at a time.` : `It unlocks after the milestones before it are paid.` })
     : el('div', { class: 'mp-grid-2 mp-submit' },
       el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, 'Agreed deliverables'),
         el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `From agreement version ${d.agreement?.version || 1}`),
@@ -425,14 +514,15 @@ function drawSubmit(d, m, keep = false) {
         Pj.pct != null ? el('div', { class: 'mp-row mp-t-sm', role: 'status' }, el('span', { class: 'mp-spinner', style: 'width:16px;height:16px' }), el('span', { id: 'upTxt' }, `Uploading… ${Pj.pct}%`)) : null,
         canWork && !m.deliverables.length ? el('span', { class: 'mp-help' }, `Add at least one file, then mark ${m.label} delivered.`) : null));
   (keep ? mountKeep : mount)(appShell('freelancer',
-    back(`/p/${pid}`, d.agreement?.body?.title || 'Project'),
+    back(`/p/${pid}`, titleOf(d)),
     strip(d, m, `/p/${pid}/m`),
     el('div', { class: 'mp-stack', style: 'gap:6px' }, el('h1', { class: 'mp-t-title' }, `${m.label} · ${m.title}`),
-      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by PayPal${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}`) : null)),
+      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by Milestone Pay${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}`) : null)),
     holdWarning(m, cur, cname, 'freelancer'),
     revising ? el('div', { class: 'mp-stack' }, badge('issue', 'alert', `Changes requested · round ${m.rev_count}${m.rev_limit ? ` of ${m.rev_limit}` : ''}`),
       alertBox('issue', 'flag', el('b', {}, `${cname} asked for changes`), el('div', {}, `“${m.rev_note || ''}”`))) : null,
     head, Pj.err ? alertBox('issue', 'alert', Pj.err) : null, body,
+    revising || m.rev_count > 0 ? chatCard(d, 'freelancer', (x) => { const mm = x.milestones.find((y) => y.id === m.id); if (mm) drawSubmit(x, mm, true); }) : null,
     d.milestones.every((x) => x.status === 'paid') ? emptyState({ ic: 'check', title: 'All milestones paid', text: `Everything in the agreement is delivered and paid. Files stay available to both of you on the project page.`, actions: [link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary' }, 'Open project page')] }) : null));
 }
 /** “Hold ends in 3 days” warning for both sides (board 05). */
@@ -440,7 +530,7 @@ export function holdWarning(m, cur, other, me) {
   const left = m.payment?.expires_at && ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? daysUntil(m.payment.expires_at) : null;
   if (left == null || left > 3) return null;
   return alertBox('warn', 'clock', el('b', {}, me === 'client' ? `Hold ends in ${plural(Math.max(0, left), 'day')}. ` : `${other}’s hold for ${m.label} ends in ${plural(Math.max(0, left), 'day')}. `),
-    me === 'client' ? `PayPal stops holding your ${money(m.amount_minor, cur)} on ${fmtDay(m.payment.expires_at)}. If the work isn’t delivered by then, you’ll be asked to fund ${m.label} again. You won’t be charged twice.`
+    me === 'client' ? `The hold on your ${money(m.amount_minor, cur)} ends on ${fmtDay(m.payment.expires_at)}. If the work isn’t delivered by then, you’ll be asked to fund ${m.label} again. You won’t be charged twice.`
       : `Submit before ${fmtDay(m.payment.expires_at)} so ${other} can pay you.`);
 }
 
@@ -459,7 +549,7 @@ export function viewActivity(d) {
   }
   const cur = d.milestones.find((m) => m.is_current);
   const nextTxt = !cur ? 'Everything is paid' : cur.status === 'agreed' ? `Next: wait for ${cname} to fund ${cur.label}` : cur.status === 'submitted' ? `Next: wait for ${cname} to review ${cur.label}` : `Next: work on ${cur.label}`;
-  mount(appShell('freelancer', back(`/p/${d.project.id}`, d.agreement?.body?.title || 'Project'),
+  mount(appShell('freelancer', back(`/p/${d.project.id}`, titleOf(d)),
     pageHead('Activity', 'What happened on this project, oldest first.'),
     el('div', { class: 'mp-card mp-card--raised' }, el('div', { class: 'mp-chat', style: 'padding:0' }, feed.length ? feed : el('p', { class: 'mp-muted' }, 'Nothing has happened yet.'))),
     el('div', { class: 'mp-row mp-row--wrap' }, cur ? link(`/p/${d.project.id}/m/${cur.id}`, { class: 'mp-btn mp-btn--secondary' }, nextTxt, icon('arrow-right')) : el('span', { class: 'mp-muted' }, nextTxt),
@@ -525,7 +615,7 @@ function drawChanges(d, keep = false) {
     }
   }
   const decided = past.find((c) => c.status === 'accepted' || c.status === 'declined');
-  (keep ? mountKeep : mount)(appShell('freelancer', back(`/p/${pid}`, d.agreement?.body?.title || 'Project'),
+  (keep ? mountKeep : mount)(appShell('freelancer', back(`/p/${pid}`, titleOf(d)),
     pageHead('Change requests', `${cname} can request changes from their phone, or you can paste one they sent on chat. The AI checks it against agreement version 1.`),
     decided && decided === past[0] ? (decided.status === 'declined'
       ? alertBox('issue', 'x', el('b', {}, `${cname} declined the change order. `), `${decided.sent_version?.label || ''} · ${decided.sent_version?.title || ''} · ${money(decided.sent_version?.amount_minor || 0, cur)}. Scope stays as agreed in version 1.`)

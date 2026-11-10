@@ -1,6 +1,6 @@
 // Boot and hash routing. The journey follows the Milestone Pay design system: O1–O5 onboarding, 01–10 app screens.
-import { S, el, api, go, mount, appShell, back, errBox, emptyState, skeleton, stopPoll, homeRole, link } from './core.js';
-import { viewWelcome, viewContinue, viewLoggedOut, viewInviteLanding, acceptInvite, viewRole, viewSetup, viewDone, pendingInvite } from './onboarding.js';
+import { S, el, api, go, mount, appShell, back, errBox, emptyState, skeleton, stopPoll, homeRole, link, toast } from './core.js';
+import { viewWelcome, viewContinue, viewLoggedOut, viewInviteLanding, acceptInvite, viewRole, viewSetup, viewDone, pendingInvite, viewDeletionScheduled, takeLoginFlag } from './onboarding.js';
 import { viewProjects, viewNew, viewAgreement, viewSubmit, viewActivity, viewChanges } from './freelancer.js';
 import { projectOverview } from './project.js';
 import { viewJobs, viewClientProject, viewReview, viewRevision, viewRequestChange } from './client.js';
@@ -47,6 +47,7 @@ async function route() {
     if (h === '/start') return viewContinue('start', '/#/');
     if (h === '/login') return viewContinue('login', '/#/');
     if (h === '/logged-out') return viewLoggedOut();
+    if (h === '/account-deleted') return viewDeletionScheduled();
     if ((m = /^\/invite\/([\w-]+)$/.exec(h))) return viewInviteLanding(m[1]);
     return viewContinue('login', `/#${h}`);
   }
@@ -56,7 +57,7 @@ async function route() {
     return m[1] === 'role' ? viewRole() : m[1] === 'done' ? viewDone() : viewSetup(m[1]);
   }
   if (await needsOnboarding()) return go(pendingInvite.get() ? '/welcome/client' : '/welcome/role');
-  if (['/', '/start', '/login', '/logged-out'].includes(h)) return go(homeRole() === 'client' ? '/jobs' : '/projects');
+  if (['/', '/start', '/login', '/logged-out', '/account-deleted'].includes(h)) return go(homeRole() === 'client' ? '/jobs' : '/projects');
   if (h === '/projects') return viewProjects();
   if (h === '/jobs') return viewJobs();
   if (h === '/new') return viewNew();
@@ -88,6 +89,8 @@ async function route() {
   try { S.me = (await api('/api/session', { noLoginRedirect: true })).user; } catch { S.me = null; }
   window.addEventListener('hashchange', route);
   route();
+  // Logging in during the 15-day wait cancels a requested account deletion.
+  if (S.me && takeLoginFlag() === 'restored') toast('Welcome back. Your account won’t be deleted.', 'undo');
 })();
 
 export { el };

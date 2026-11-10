@@ -139,17 +139,26 @@ test('fixing g1 sets rev_limit 2 on every milestone and writes the term', async 
   assert.equal((await app.call('POST', `/api/agreements/${agreement.id}/gaps/g9/fix`)).status, 404);
 });
 
-test('PATCH amount: validation, mismatch flag, only amount_minor', async () => {
+test('PATCH milestone: validation, mismatch flag, only amount, title and criteria change', async () => {
   const { milestones } = await makeProject(app.call);
   const id = milestones[0].id;
   assert.equal((await app.call('PATCH', `/api/milestones/${id}`, { amount_minor: 12.5 })).body.error, 'BAD_AMOUNT');
   assert.equal((await app.call('PATCH', `/api/milestones/${id}`, { amount_minor: -1 })).body.error, 'BAD_AMOUNT');
   assert.equal((await app.call('PATCH', `/api/milestones/${id}`, { amount_minor: '5' })).body.error, 'BAD_AMOUNT');
-  const r = await app.call('PATCH', `/api/milestones/${id}`, { amount_minor: 250000, title: 'hacked', status: 'paid' });
+  const r = await app.call('PATCH', `/api/milestones/${id}`, { amount_minor: 250000, status: 'paid', label: 'M9', rev_limit: 99 });
   assert.equal(r.status, 200);
   assert.equal(r.body.milestone.amount_minor, 250000);
   assert.equal(r.body.milestone.title, 'Part 1');
   assert.equal(r.body.milestone.status, 'draft');
+  assert.equal(r.body.milestone.label, 'M1');
+  assert.equal(r.body.milestone.rev_limit, null);
+  const t = await app.call('PATCH', `/api/milestones/${id}`, { title: '  Homepage design ', criteria: ['Figma file', ' Two rounds of feedback '] });
+  assert.equal(t.status, 200);
+  assert.equal(t.body.milestone.title, 'Homepage design');
+  assert.deepEqual(t.body.milestone.criteria, ['Figma file', 'Two rounds of feedback']);
+  assert.equal(t.body.milestone.amount_minor, 250000);
+  assert.equal((await app.call('PATCH', `/api/milestones/${id}`, { title: '' })).body.error, 'BAD_MILESTONE');
+  assert.equal((await app.call('PATCH', `/api/milestones/${id}`, { status: 'paid' })).body.error, 'BAD_MILESTONE');
   assert.equal(r.body.sum_minor, 810000);
   assert.equal(r.body.agreed_total_minor, 800000);
   assert.equal(r.body.mismatch, true);
@@ -248,4 +257,50 @@ test('sandbox-login works from localhost', async () => {
   const r = await app.call('GET', '/api/sandbox-login');
   assert.equal(r.status, 200);
   assert.ok('email' in r.body && 'password' in r.body);
+});
+
+test('milestones can be added and removed on a draft (more than three), never after approval', async () => {
+  const { pid, agreement, milestones } = await makeProject(app.call);
+  assert.equal(milestones.length, 3);
+  const a1 = await app.call('POST', `/api/agreements/${agreement.id}/milestones`, { title: 'Handover' });
+  assert.equal(a1.status, 201);
+  const a2 = await app.call('POST', `/api/agreements/${agreement.id}/milestones`, {});
+  assert.deepEqual(a2.body.milestones.map((m) => m.label), ['M1', 'M2', 'M3', 'M4', 'M5']);
+  assert.equal(a2.body.milestones[3].title, 'Handover');
+  assert.equal(a2.body.milestones[4].amount_minor, 0);
+  // removing one in the middle relabels the rest in order
+  const del = await app.call('DELETE', `/api/milestones/${a2.body.milestones[1].id}`);
+  assert.equal(del.status, 200);
+  assert.deepEqual(del.body.milestones.map((m) => [m.label, m.seq]), [['M1', 1], ['M2', 2], ['M3', 3], ['M4', 4]]);
+  assert.equal(del.body.milestones[2].title, 'Handover');
+  // a zero-amount milestone blocks approval until it is priced
+  assert.equal((await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'freelancer' })).body.error, 'AMOUNT_MISMATCH');
+  const ms = del.body.milestones;
+  for (const [i, v] of [300000, 200000, 200000, 100000].entries()) await app.call('PATCH', `/api/milestones/${ms[i].id}`, { amount_minor: v });
+  const f = await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'freelancer' });
+  assert.equal(f.body.agreement.status, 'sent');
+  assert.equal((await app.call('POST', `/api/agreements/${agreement.id}/milestones`, {})).body.error, 'AGREEMENT_FROZEN');
+  assert.equal((await app.call('DELETE', `/api/milestones/${ms[0].id}`)).body.error, 'AGREEMENT_FROZEN');
+  assert.equal((await app.call('PATCH', `/api/milestones/${ms[0].id}`, { title: 'x' })).body.error, 'AGREEMENT_FROZEN');
+  assert.equal((await app.call('GET', `/api/projects/${pid}`)).body.milestones.length, 4);
+});
+
+test('the freelancer can rename the project; a locked agreement keeps its own title', async () => {
+  const { pid, agreement } = await makeProject(app.call);
+  assert.equal((await app.call('PATCH', `/api/projects/${pid}`, { title: '  ' })).body.error, 'BAD_TITLE');
+  const r = await app.call('PATCH', `/api/projects/${pid}`, { title: 'Baan Kafe site v2' });
+  assert.equal(r.status, 200);
+  let d = (await app.call('GET', `/api/projects/${pid}`)).body;
+  assert.equal(d.project.title, 'Baan Kafe site v2');
+  assert.equal(d.agreement.body.title, 'Baan Kafe site v2');
+  for (const g of agreement.body.gaps) await app.call('POST', `/api/agreements/${agreement.id}/gaps/${g.id}/fix`);
+  const f = await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'freelancer' });
+  await app.call('PATCH', `/api/projects/${pid}`, { title: 'Renamed later' });
+  d = (await app.call('GET', `/api/projects/${pid}`)).body;
+  assert.equal(d.project.title, 'Renamed later');
+  assert.equal(d.agreement.body.title, 'Baan Kafe site v2');
+  assert.equal(d.agreement.content_hash, f.body.agreement.content_hash);
+  // the client can still approve with the hash they were shown
+  const c = await app.call('POST', `/api/agreements/${agreement.id}/approve`, { party: 'client', content_hash: f.body.agreement.content_hash });
+  assert.equal(c.body.agreement.status, 'approved');
 });

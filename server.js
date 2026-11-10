@@ -8,7 +8,7 @@ import { labRouter } from './lab.js';
 import * as realPaypal from './paypal.js';
 import * as realAi from './ai.js';
 import * as realAgent from './agent.js';
-import { createRoutes, invitePreview } from './routes.js';
+import { createRoutes, invitePreview, purgeDueAccounts } from './routes.js';
 import { loadConfig } from './config.js';
 import { identity as realIdentity, authRouter, loadSession, requireUser } from './auth.js';
 import { securityHeaders, originCheck, rateLimit, requestLog, clientIp } from './security.js';
@@ -156,6 +156,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT) || 3000;
   await db.connect();
   createApp().listen(port, () => console.log(`Milestone Pay on http://localhost:${port} (store: ${db.backend()})`));
+  // Erase accounts whose 15-day deletion wait is over: now, then every hour.
+  const purge = () => { try { const n = purgeDueAccounts(); if (n) console.log(`accounts erased: ${n}`); } catch (e) { console.error('purge failed:', e.message); } };
+  purge();
+  setInterval(purge, 60 * 60 * 1000).unref();
   process.on('SIGTERM', async () => {
     await db.flush().catch(() => {});
     process.exit(0);

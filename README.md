@@ -1,6 +1,6 @@
 # Milestone Pay
 
-Milestone Pay turns a freelance chat (LINE, WhatsApp) into a clear agreement with milestones. For each milestone, PayPal holds the client's money until the work is delivered. When the client approves the work, an AI agent asks for that approval, checks it, and releases the payment. PayPal holds the funds; this app never does.
+Milestone Pay turns a freelance chat (LINE, WhatsApp) into a clear agreement with milestones. For each milestone, the client pays with PayPal and Milestone Pay holds the money until the work is delivered. When the client approves the work, an AI agent checks that approval, releases the payment and sends it on to the freelancer's PayPal.
 
 Everything here runs on the PayPal **sandbox**. The money is fake.
 
@@ -12,11 +12,11 @@ Everything here runs on the PayPal **sandbox**. The money is fake.
 
 Everyone logs in with **Log in with PayPal** using a PayPal *sandbox personal* account, never a real PayPal login. Create sandbox accounts at [developer.paypal.com](https://developer.paypal.com) under **Testing Tools > Sandbox Accounts**.
 
-- **Freelancer:** log in, press **+ New project**, paste the chat, review the agreement and press **Approve & send to client**. Then press **Create invite link** and send the link to your client on LINE or WhatsApp. The link works once and expires after 7 days.
+- **Freelancer:** log in, press **+ New project**, paste the chat, review the agreement and press **Approve & send to client**. Then press **Copy link** and send the link to your client on LINE or WhatsApp. It is the same link every time, it does not expire, and your client can open it as often as they need.
 - **Client:** open the invite link, log in with PayPal, press **Join as the client**, approve the agreement (no charge) and fund each milestone with the PayPal button.
 - **Privacy:** each project is visible only to its freelancer and the client who joined it. Anyone else gets "Project not found".
-- **Sandbox payee:** in this beta, captured payments go to the Milestone Pay demo merchant account, not to the freelancer's own PayPal. Per-freelancer payouts (PayPal multiparty onboarding) come next.
-- **Leaving:** `DELETE /api/me` removes your projects (unless a client has money on hold) and signs you out everywhere.
+- **Getting paid:** the client's payment is held on the Milestone Pay merchant account. When the client approves, it is captured and then sent to the freelancer's PayPal (the account they log in with) through PayPal Payouts. The REST app needs **Payouts** switched on in the developer dashboard and enough sandbox balance to cover the amount plus PayPal's fee; if a payout fails, the milestone stays paid and **Check with PayPal** on the project page retries it.
+- **Leaving:** **Settings > Delete account** logs you out everywhere and deletes your data after 15 days. Log in again before then and the deletion stops. It is refused while money is on hold.
 
 ---
 

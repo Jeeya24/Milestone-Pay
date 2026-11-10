@@ -99,6 +99,7 @@ export const userView = (u) => ({
   hire_for: Array.isArray(u.hire_for) ? u.hire_for : [],
   onboarded: !!u.onboarded_at,
   created_at: u.created_at || null,
+  avatar_url: u.avatar?.data ? `/api/users/${u.id}/avatar?v=${Date.parse(u.avatar.at) || 0}` : null,
 });
 
 /** Store a new session (hashed) and return its raw token. Also used by seed.js for its in-process calls. */
@@ -158,8 +159,12 @@ function upsertUser({ paypal_user_id, email, name }) {
   } else {
     Object.assign(u, { email: email || u.email, name: name || u.name, last_login_at: now(), deleted_at: undefined });
   }
+  // Logging in during the 15-day wait cancels a requested account deletion.
+  const restored = !!u.delete_after;
+  delete u.delete_after;
+  delete u.delete_requested_at;
   db.save();
-  return u;
+  return { user: u, restored };
 }
 
 // ---------------------------------------------------------------------------
@@ -199,9 +204,9 @@ export function authRouter({ identity: id = identity, config }) {
     }
     if (!info?.user_id) return res.redirect(302, withLoginFlag(st.next, 'failed'));
     const email = info.email || info.emails?.find((e) => e.primary)?.value || null;
-    const u = upsertUser({ paypal_user_id: String(info.user_id), email, name: info.name ? String(info.name).slice(0, 80) : null });
+    const { user: u, restored } = upsertUser({ paypal_user_id: String(info.user_id), email, name: info.name ? String(info.name).slice(0, 80) : null });
     createSession(req, res, u.id, config);
-    res.redirect(302, safeNext(st.next));
+    res.redirect(302, restored ? withLoginFlag(st.next, 'restored') : safeNext(st.next));
   });
 
   r.post('/logout', (req, res) => {
@@ -219,9 +224,9 @@ export function authRouter({ identity: id = identity, config }) {
     r.post('/test-login', (req, res) => {
       const name = String(req.body?.name || '').trim().slice(0, 60);
       if (!name) throw new db.AppError('NAME_REQUIRED', 'name is required');
-      const u = upsertUser({ paypal_user_id: `test:${name.toLowerCase()}`, email: `${name.toLowerCase().replace(/\W+/g, '.')}@test.local`, name });
+      const { user: u, restored } = upsertUser({ paypal_user_id: `test:${name.toLowerCase()}`, email: `${name.toLowerCase().replace(/\W+/g, '.')}@test.local`, name });
       createSession(req, res, u.id, config);
-      res.json({ user: userView(u) });
+      res.json({ user: userView(u), restored });
     });
   }
   return r;
