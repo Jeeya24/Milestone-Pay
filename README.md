@@ -1,6 +1,6 @@
 # Milestone Pay
 
-Milestone Pay turns a freelance chat (from any messaging app) into a clear agreement with milestones. For each milestone, the client pays with PayPal and Milestone Pay holds the money until the work is delivered. When the client approves the work, an AI agent checks that approval, releases the payment and sends it on to the freelancer's PayPal.
+Milestone Pay helps student freelancers turn a project agreed in chat (any chat app) into a clear agreement with milestones. For each milestone, the client pays with PayPal and Milestone Pay holds the money until the work is delivered. When the client approves the work, an AI agent checks that approval, releases the payment and sends it on to the freelancer's PayPal.
 
 Everything here runs on the PayPal **sandbox**. The money is fake.
 

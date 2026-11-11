@@ -136,7 +136,7 @@ export function viewRole() {
   const cards = el('div', { class: 'mp-roles', role: 'radiogroup', 'aria-label': 'How will you use Milestone Pay?' });
   const paint = () => {
     cards.replaceChildren(card('client', 'briefcase', 'I’m hiring', 'Client', 'Fund work one milestone at a time and pay only when you approve it.'),
-      card('freelancer', 'laptop', 'I’m a freelancer', 'Freelancer', 'Agree jobs with clients and get paid as you finish each milestone.'));
+      card('freelancer', 'laptop', 'I’m a freelancer', 'Freelancer', 'Keep every project in one place and get paid as you finish each milestone.'));
     cont.disabled = !pick;
     cont.replaceChildren(pick ? `Continue as a ${pick === 'client' ? 'client' : 'freelancer'}` : 'Continue', pick ? icon('arrow-right') : '');
     why.textContent = pick ? '' : 'Choose an option to continue';
@@ -166,13 +166,13 @@ export function viewSetup(role) {
   if (role === 'client' && S.me.active_role !== 'client') api('/api/me', { method: 'PATCH', body: { role: 'client' } }).then((r) => { S.me = r.user; }).catch(() => {});
   let type = S.me.client_type || 'business';
   const nameIn = el('input', { class: 'mp-input', id: 'displayName', maxlength: 60, value: S.me.display_name || S.me.name || '', autocomplete: 'name' });
-  const nameMsg = el('span', { class: 'mp-ok' }, icon('check'), role === 'client' ? 'Freelancers will see this on agreements' : S.me.name ? `Prefilled from PayPal (${S.me.name}). Change it to your studio name if you like.` : 'Clients will see this name');
+  const nameMsg = el('span', { class: 'mp-ok' }, icon('check'), role === 'client' ? 'Freelancers will see this on agreements' : S.me.name ? `From PayPal (${S.me.name}). Change it if you freelance under another name.` : 'Clients will see this name');
   nameIn.addEventListener('input', () => { if (nameIn.value.trim() && nameMsg.className === 'mp-err') { nameIn.classList.remove('mp-input--error'); nameMsg.className = 'mp-ok'; nameMsg.replaceChildren(icon('check'), role === 'client' ? 'Freelancers will see this on agreements' : 'Clients will see this name'); } });
   const nameLabel = el('label', { class: 'mp-label', for: 'displayName' }, role === 'client' ? 'Business name' : 'Display name');
   const tags = role === 'client' ? tagPicker(HIRE, S.me.hire_for, { other: OTHER, addLabel: 'Type what you hire for' })
     : tagPicker(SKILLS, S.me.skills, { allowAdd: true, addLabel: 'Add a skill' });
   const tagErr = el('div');
-  const bio = role === 'freelancer' ? el('textarea', { class: 'mp-input', id: 'bio', rows: 2, maxlength: 160, placeholder: 'Bangkok-based designer for cafés and small shops.' }, S.me.bio || '') : null;
+  const bio = role === 'freelancer' ? el('textarea', { class: 'mp-input', id: 'bio', rows: 2, maxlength: 160, placeholder: 'Design student doing logos and menus for cafés.' }, S.me.bio || '') : null;
   const bioCount = el('span', { class: 'mp-t-caption mp-muted' }, `${(S.me.bio || '').length} / 160`);
   bio?.addEventListener('input', () => { bioCount.textContent = `${bio.value.length} / 160`; });
   const seg = el('div', { class: 'mp-seg', role: 'radiogroup', 'aria-label': 'Are you hiring as' });
@@ -221,14 +221,14 @@ export async function viewDone() {
   if (role === 'client' && token) { try { invite = await api(`/api/invites/${encodeURIComponent(token)}`); } catch { /* fall back to Your jobs */ } }
   const row = (ic, label, right) => el('div', { class: 'mp-summary__row' }, el('span', { class: 'mp-row', style: 'color:var(--ink)' }, icon(ic), label), el('span', { class: 'mp-ok', style: 'justify-content:flex-end' }, icon('check'), right));
   const next = role === 'freelancer'
-    ? { ic: 'plus', text: 'Paste a chat with a client and we’ll turn it into milestones.', btn: 'Create your first job', to: () => go('/new') }
+    ? { ic: 'plus', text: 'Paste a client chat and we’ll turn it into milestones. No paperwork.', btn: 'Create your first project', to: () => go('/new') }
     : invite ? { ic: 'file', text: `${invite.freelancer?.name || 'Your freelancer'}’s agreement is waiting for you.`, sub: [invite.project?.title, invite.total_minor ? money(invite.total_minor, invite.currency) : null, invite.parts ? `${invite.parts} parts` : null].filter(Boolean).join(' · '), btn: 'Review the agreement', to: () => acceptInvite(token) }
       : { ic: 'briefcase', text: 'When a freelancer sends you an agreement link, open it and the project appears here.', btn: 'Go to Hired projects', to: () => go('/jobs') };
   const btn = el('button', { class: 'mp-btn mp-btn--primary mp-btn--block', id: 'doneNext', onclick: next.to }, next.btn, icon('arrow-right'));
   mount(authShell(el('div', { class: 'mp-authcard' },
     el('div', { class: 'mp-authcard__head' }, el('span', { class: 'mp-authcard__icon mp-authcard__icon--success' }, icon('check', 'mp-i--lg')),
       el('h1', { class: 'mp-t-title' }, `You’re all set, ${first}`),
-      el('p', { class: 'mp-muted mp-t-sm' }, role === 'client' ? `Your client account${S.me.client_type === 'business' && S.me.display_name ? ` for ${S.me.display_name}` : ''} is ready.` : 'Your freelancer account is ready.')),
+      el('p', { class: 'mp-muted mp-t-sm' }, role === 'client' ? `Your client account${S.me.client_type === 'business' && S.me.display_name ? ` for ${S.me.display_name}` : ''} is ready.` : 'All your projects, in one place.')),
     el('div', { class: 'mp-summary' }, row('banknote', 'PayPal', S.me.email || 'Connected'), row(role === 'client' ? 'building' : 'user', role === 'client' ? (S.me.client_type === 'business' ? 'Business details' : 'Your details') : 'Profile', 'Done')),
     el('div', { class: 'mp-next mp-next--stack' }, el('div', { class: 'mp-row', style: 'gap:12px;align-items:flex-start' }, el('span', { class: 'mp-next__icon', style: 'width:32px;height:32px' }, icon(next.ic)),
       el('div', {}, el('div', { class: 'mp-next__label' }, 'Your next step'), el('div', { class: 'mp-next__text' }, next.text), next.sub ? el('div', { class: 'mp-t-sm mp-muted' }, next.sub) : null))),

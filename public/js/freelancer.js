@@ -25,7 +25,7 @@ export async function viewProjects() {
   const newBtn = link('/new', { class: 'mp-btn mp-btn--primary' }, icon('plus'), 'New project');
   if (!all.length) {
     return mount(appShell('freelancer', pageHead('Your projects', null, el('span', { class: 'mp-hide-phone' })),
-      emptyState({ ic: 'chat', title: 'No projects yet', text: 'Paste the chat where you agreed a job, from any messaging app. We’ll turn it into an agreement with milestones.',
+      emptyState({ ic: 'chat', title: 'No projects yet', text: 'Paste a client chat. We’ll turn it into an agreement with milestones.',
         actions: [link('/new', { class: 'mp-btn mp-btn--primary' }, 'Paste a chat'), demoBtn('mp-btn--secondary')] }),
       sandboxNote()));
   }
@@ -51,11 +51,11 @@ export async function viewProjects() {
         link(`/p/${p.id}/changes`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, 'Review request')) : null);
   };
   mount(appShell('freelancer',
-    pageHead('Your projects', 'What’s held for you, what’s paid, and what still needs funding.', newBtn),
+    pageHead('Your projects', 'All your projects in one place: held, paid and not yet funded.', newBtn),
     el('div', { class: 'mp-grid-3' },
-      stat('lock', 'Held by Milestone Pay', data.totals.held_minor, cur, 'Clients have funded this. You get it when they approve your work.'),
+      stat('lock', 'Held by Milestone Pay', data.totals.held_minor, cur, 'Yours when the client approves your work.'),
       stat('check', 'Paid to you', data.totals.paid_minor, cur, 'Paid into your PayPal account.'),
-      stat('circle-dashed', 'Not funded yet', data.totals.not_funded_minor, cur, 'Agreed or drafted, but the client hasn’t funded it.')),
+      stat('circle-dashed', 'Not funded yet', data.totals.not_funded_minor, cur, 'The client hasn’t funded it yet.')),
     mine.length ? el('div', { class: 'mp-stack mp-stack--4' }, mine.map(row))
       : el('p', { class: 'mp-muted' }, 'Every project is archived. Open the list below to bring one back, or start a new project.'),
     archivedList(archived, row),
@@ -198,14 +198,14 @@ export function viewNew() {
   paintFiles();
   mount(appShell('freelancer',
     el('button', { class: 'mp-back', type: 'button', onclick: leave }, icon('arrow-left'), 'Back to projects'),
-    pageHead('New project', 'Paste the chat where you agreed the job. Thai, English or mixed is fine. Prices should be in USD.'),
+    pageHead('New project', 'No paperwork. Paste the chat where you agreed the work. Thai, English or mixed. Prices in USD.'),
     el('div', { class: 'mp-grid-2 mp-paste' },
       el('div', { class: 'mp-stack mp-stack--4' },
         el('div', { class: 'mp-field' }, el('label', { class: 'mp-label', for: 'freelancerName' }, 'Your name in this chat'), name, el('span', { class: 'mp-help' }, 'So we know which messages are yours.')),
         el('div', { class: 'mp-field' }, el('label', { class: 'mp-label', for: 'chatText' }, 'Paste your chat'), ta,
-          el('span', { class: 'mp-help' }, 'We read names, prices, dates and what was agreed. Nothing is sent to your client yet.'))),
+          el('span', { class: 'mp-help' }, 'Nothing is sent to your client yet.'))),
       el('div', { class: 'mp-stack mp-stack--4' }, el('span', { class: 'mp-label' }, 'Or upload the chat'), drop, picker, files, errs,
-        el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'Upload screenshots in order. Overlapping messages are merged, and you can check every line on the next screen.'))),
+        el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'Upload screenshots in order. You can check every line on the next screen.'))),
     el('div', { id: 'newErr', class: 'mp-stack' }), out,
     el('div', { class: 'mp-divider' }),
     el('div', { class: 'mp-row mp-row--between mp-row--wrap mp-sticky-cta' },
@@ -356,7 +356,7 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
     el('div', { class: 'mp-card__head' }, el('h2', { class: 'mp-t-section' }, `Milestones · ${milestones.length}`), totalEl),
     el('div', { class: 'mp-stack mp-stack--3' }, msList.length ? msList : el('p', { class: 'mp-muted' }, 'No milestones found.')), mismatch,
     frozen ? null : el('div', { class: 'mp-row mp-row--between mp-row--wrap', style: 'margin-top:12px' }, addMs,
-      el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'The AI drafted these. Change any title, description or amount, and add or remove milestones, before you send it.')));
+      el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'AI draft. Edit, add or remove milestones before you send it.')));
   paintSum();
   apBtn?.addEventListener('click', async () => {
     const term = (k) => (b.terms || []).find((t) => t.key === k)?.value;
@@ -380,7 +380,7 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
       el('div', { class: 'mp-stack', style: 'gap:4px;min-width:0' },
         agreement.status === 'draft' ? el('span', { class: 'mp-t-caption mp-muted' }, 'Review the agreement') : null,
         editableTitle(d, (x) => { R.d = x; redraw(); }),
-        el('p', { class: 'mp-muted' }, agreement.status === 'draft' ? `The AI drafted this from your chat. Check it, fix the gaps, then send it to ${cname}.` : `Version 1 · ${fname} and ${cname}`)),
+        el('p', { class: 'mp-muted' }, agreement.status === 'draft' ? `Check the draft, fix the gaps, then send it to ${cname}.` : `Version 1 · ${fname} and ${cname}`)),
       (AGREEMENT_BADGE[agreement.status] || AGREEMENT_BADGE.draft)()),
     err ? errBox(err) : null,
     el('div', { class: 'mp-review' }, el('div', { class: 'mp-review__chat' }, chatCard),
@@ -407,8 +407,8 @@ export function inviteBox(d) {
   const box = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--3', id: 'inviteBox' });
   const paint = (url, err) => box.replaceChildren(
     el('b', { class: 'mp-t-sub mp-row' }, icon(client ? 'check' : 'link'), client ? `${who} joined as the client` : `Link for ${who}`),
-    el('p', { class: 'mp-t-sm mp-muted' }, client ? `This is the link you sent. Copy it again any time: ${who} can use it to get back to this project as often as they need.`
-      : `${who} opens it, continues with PayPal and sees the agreement. The link keeps working, so you can copy and send it again whenever you need to.`),
+    el('p', { class: 'mp-t-sm mp-muted' }, client ? `The link you sent. ${who} can use it to get back to this project any time.`
+      : `${who} opens it, continues with PayPal and sees the agreement. The link keeps working.`),
     url ? el('div', { class: 'mp-row mp-linkrow' }, el('input', { class: 'mp-input', readonly: true, value: url, id: 'inviteUrl', 'aria-label': 'Client link', onfocus: (e) => e.target.select() }),
       el('button', { class: 'mp-btn mp-btn--secondary', type: 'button', id: 'copyInvite', onclick: () => copyText(url, 'Link') }, icon('link'), 'Copy link'))
       : err ? el('div', { class: 'mp-stack' }, errBox(err), el('div', {}, el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', type: 'button', onclick: load }, 'Try again')))
@@ -501,7 +501,7 @@ function drawSubmit(d, m, keep = false) {
   else head = null;
   const notFunded = m.status === 'agreed' || m.status === 'draft';
   const body = notFunded
-    ? emptyState({ ic: 'clock', title: `${m.label} · ${m.title} isn’t funded yet`, text: m.fundable ? `We asked ${cname} to fund ${m.label} (${money(m.amount_minor, cur)}). Work starts once Milestone Pay holds it. Milestones are funded one at a time.` : `It unlocks after the milestones before it are paid.` })
+    ? emptyState({ ic: 'clock', title: `${m.label} · ${m.title} isn’t funded yet`, text: m.fundable ? `We asked ${cname} to fund ${m.label} (${money(m.amount_minor, cur)}). Work starts once Milestone Pay holds it.` : `It unlocks after the milestones before it are paid.` })
     : el('div', { class: 'mp-grid-2 mp-submit' },
       el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, 'Agreed deliverables'),
         el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `From agreement version ${d.agreement?.version || 1}`),
@@ -528,7 +528,7 @@ function drawSubmit(d, m, keep = false) {
       alertBox('issue', 'flag', el('b', {}, `${cname} asked for changes`), el('div', {}, `“${m.rev_note || ''}”`))) : null,
     head, m.invoice ? el('div', { class: 'mp-card mp-card--raised' }, invoiceLinks(m)) : null, Pj.err ? alertBox('issue', 'alert', Pj.err) : null, body,
     revising || m.rev_count > 0 ? chatCard(d, 'freelancer', (x) => { const mm = x.milestones.find((y) => y.id === m.id); if (mm) drawSubmit(x, mm, true); }) : null,
-    d.milestones.every((x) => x.status === 'paid') ? emptyState({ ic: 'check', title: 'All milestones paid', text: `Everything in the agreement is delivered and paid. Files stay available to both of you on the project page.`, actions: [link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary' }, 'Open project page')] }) : null));
+    d.milestones.every((x) => x.status === 'paid') ? emptyState({ ic: 'check', title: 'All milestones paid', text: `Everything is delivered and paid. Files stay on the project page for both of you.`, actions: [link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary' }, 'Open project page')] }) : null));
 }
 /** “Hold ends in 3 days” warning for both sides (board 05). */
 export function holdWarning(m, cur, other, me) {
@@ -613,7 +613,7 @@ function drawChanges(d, keep = false) {
   }
   // ---- no open request: say so in one line; the box for a request that came in chat sits in the corner
   const idle = open ? null : approved
-    ? alertBox('info', 'inbox', el('b', {}, `No open request from ${cname}. `), `When ${cname} asks for a change in the app, it shows up here. Did they ask in your chat instead? Use “Check a request from chat” in the corner.`)
+    ? alertBox('info', 'inbox', el('b', {}, `No open request from ${cname}. `), `Requests ${cname} sends in the app show up here. Asked in chat instead? Use “Check a request from chat”.`)
     : emptyState({ ic: 'lock', title: 'Not open yet', text: 'Change requests open once both of you have approved the agreement.' });
   const decided = past.find((c) => c.status === 'accepted' || c.status === 'declined');
   const how = (n, t) => el('span', { class: 'mp-howstep' }, el('b', {}, n), t);
@@ -638,7 +638,7 @@ function drawChanges(d, keep = false) {
     }
   }
   (keep ? mountKeep : mount)(appShell('freelancer', back(`/p/${pid}`, titleOf(d)),
-    pageHead('Change requests', `Extra work or changes ${cname} asks for after the agreement was approved.`),
+    pageHead('Change requests', `Work ${cname} asks for beyond the agreement is a new milestone, not a favour.`),
     el('div', { class: 'mp-how', 'aria-label': 'How change requests work' }, how('1', `${cname} asks in the app, or you paste what they asked in chat`), how('2', 'The AI checks it against agreement version 1'), how('3', `If it’s new work you send a price, and ${cname} accepts or declines`)),
     decided && decided === past[0] ? (decided.status === 'declined'
       ? alertBox('issue', 'x', el('b', {}, `${cname} declined the change order. `), `${decided.sent_version?.label || ''} · ${decided.sent_version?.title || ''} · ${money(decided.sent_version?.amount_minor || 0, cur)}. Scope stays as agreed in version 1.`)
@@ -649,7 +649,7 @@ function drawChanges(d, keep = false) {
         el('tbody', {}, past.map((c) => { const k = KIND_BADGE[c.classification]; return el('tr', {}, el('td', { title: c.text, 'data-label': 'Request' }, c.sent_version?.title || (c.text.length > 70 ? `${c.text.slice(0, 70)}…` : c.text)), el('td', { 'data-label': 'From' }, c.from === 'client' ? cname : 'You'), el('td', { 'data-label': 'When' }, fmtDate(c.created_at)),
           el('td', { 'data-label': 'AI check' }, k ? badge(k[0], k[1], k[2]) : ''),
           el('td', { 'data-label': 'Result' }, c.status === 'accepted' ? badge('success', 'check', 'Accepted') : c.status === 'declined' ? badge('neutral', 'x', 'Declined') : badge('neutral', 'check', 'Closed'))); }))))
-        : el('p', { class: 'mp-muted mp-t-sm' }, 'Requests you’ve dealt with, and how each one ended, will be listed here.')) : null,
+        : el('p', { class: 'mp-muted mp-t-sm' }, 'Closed requests will be listed here.')) : null,
     corner));
 }
 function draftEditor(c, d, cur, cname) {

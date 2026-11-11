@@ -325,7 +325,7 @@ export function topbar(role = homeRole()) {
 }
 export async function switchRole(role, add = false) {
   try { S.me = (await api('/api/me', { method: 'PATCH', body: add ? { add_role: role } : { role } })).user; } catch (e) { return toast(e.message, 'alert'); }
-  if (add) toast(role === 'client' ? 'Client role added. Projects you hire for show under Hired projects.' : 'Freelancer role added. Paste a chat to start a job.');
+  if (add) toast(role === 'client' ? 'Client role added. Projects you hire for show under Hired projects.' : 'Freelancer role added. Paste a chat to start a project.');
   go(role === 'client' ? '/jobs' : '/projects');
 }
 export async function logout() {

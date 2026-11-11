@@ -84,7 +84,7 @@ export function viewSettings() {
   let type = S.me.client_type || 'business';
   const name = el('input', { class: 'mp-input', id: 'setName', maxlength: 60, value: S.me.display_name || S.me.name || '' });
   const tags = isClient ? tagPicker(HIRE, S.me.hire_for, { other: OTHER, addLabel: 'Type what you hire for' }) : tagPicker(SKILLS, S.me.skills, { allowAdd: true, addLabel: 'Add a skill' });
-  const bio = el('textarea', { class: 'mp-input', id: 'setBio', rows: 2, maxlength: 160, placeholder: isClient ? 'A small café in Ari, Bangkok.' : 'Bangkok-based designer for cafés and small shops.' }, S.me.bio || '');
+  const bio = el('textarea', { class: 'mp-input', id: 'setBio', rows: 2, maxlength: 160, placeholder: isClient ? 'A small café in Ari, Bangkok.' : 'Design student doing logos and menus for cafés.' }, S.me.bio || '');
   const count = el('span', { class: 'mp-t-caption mp-muted' }, `${(S.me.bio || '').length} / 160`);
   bio.addEventListener('input', () => { count.textContent = `${bio.value.length} / 160`; });
   const seg = el('div', { class: 'mp-seg', role: 'radiogroup', 'aria-label': 'Hiring as' });
