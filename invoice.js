@@ -12,14 +12,14 @@ const fmtDate = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toL
 function settledPayment(m) {
   const d = db.load();
   if (!m || m.status !== 'paid') return null;
-  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && p.status === 'CAPTURED' && p.capture_id && p.authorization_id);
+  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && p.status === 'CAPTURED' && p.capture_id);
   const approved = d.proposals.some((p) => p.milestone_id === m.id && p.action === 'release' && p.status === 'executed' && p.approved_by === 'client');
   return pay && approved && pay.payout_status === 'SENT' ? pay : null;
 }
 
 /**
  * Issue the milestone's invoice if it is due and not issued yet. Idempotent; returns the invoice record or null.
- * Needs: funded (authorization), approved by the client (executed release proposal), captured, and paid out (SENT).
+ * Needs: funded (captured and held), approved by the client (executed release proposal), and paid out (SENT).
  */
 export function issueInvoice(milestoneId) {
   const d = db.load();
@@ -60,7 +60,7 @@ export function invoiceData(milestoneId) {
   const when = (event) => d.ledger.find((l) => l.milestone_id === m.id && l.event === event)?.at || null;
   return {
     ...pay.invoice,
-    funded_at: when('AUTHORIZED'), approved_at: when('CAPTURED'), paid_out_at: when('PAID_OUT'),
+    funded_at: when('HELD') || when('AUTHORIZED'), approved_at: when('CAPTURED'), paid_out_at: when('PAID_OUT'),
     order_id: pay.order_id, capture_id: pay.capture_id, payout_batch_id: pay.payout_batch_id || null,
   };
 }

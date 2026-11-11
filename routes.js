@@ -169,7 +169,7 @@ function getMilestone(id) {
 function paymentView(p) {
   return p ? {
     order_id: p.order_id, authorization_id: p.authorization_id || null, expires_at: p.expires_at || null,
-    capture_id: p.capture_id || null, status: p.status,
+    capture_id: p.capture_id || null, refund_id: p.refund_id || null, status: p.status,
     payout_status: p.payout_status || null, payout_batch_id: p.payout_batch_id || null,
   } : null;
 }
@@ -177,7 +177,7 @@ function paymentView(p) {
 export function proposalView(p) {
   return p && {
     id: p.id, milestone_id: p.milestone_id, action: p.action, status: p.status,
-    reason: p.reason, approved_by: p.approved_by ?? null, created_at: p.created_at,
+    reason: p.reason, requested_by: p.requested_by ?? null, approved_by: p.approved_by ?? null, created_at: p.created_at,
   };
 }
 
@@ -202,7 +202,9 @@ export function milestoneView(m) {
       download_url: `/api/deliverables/${x.id}/download`,
     })),
     versions,
-    proposal: proposalView([...d.proposals].reverse().find((p) => p.milestone_id === m.id && (p.status === 'pending' || p.status === 'approved'))) ?? null,
+    proposal: proposalView([...d.proposals].reverse().find((p) => p.milestone_id === m.id && p.action !== 'refund' && (p.status === 'pending' || p.status === 'approved'))) ?? null,
+    // The client's latest refund request: pending (waiting for the freelancer), approved (refund in progress) or declined.
+    refund_request: proposalView([...d.proposals].reverse().find((p) => p.milestone_id === m.id && p.action === 'refund' && ['pending', 'approved', 'declined'].includes(p.status))) ?? null,
     invoice: invoiceView(m),
   };
 }
@@ -425,16 +427,18 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const ids = new Set(projects.filter((p) => myRole.get(p.id) === 'freelancer').map((p) => p.id)); // totals: my freelance work
     const latest = new Map(); // milestone_id -> latest ledger event
     let paid = 0;
+    const released = new Set(); // milestones whose payment was released to the freelancer
     for (const l of d.ledger) {
       if (!ids.has(l.project_id) || !l.event) continue;
       latest.set(l.milestone_id, l.event);
-      if (l.event === 'CAPTURED') paid += l.amount_minor;
-      if (l.event === 'REFUNDED') paid -= l.amount_minor;
+      if (l.event === 'CAPTURED') { paid += l.amount_minor; released.add(l.milestone_id); }
+      // A refund of a payment that was only held never counted as paid, so it takes nothing off.
+      if (l.event === 'REFUNDED' && released.has(l.milestone_id)) paid -= l.amount_minor;
     }
     let held = 0, notFunded = 0;
     for (const m of d.milestones) {
       if (!ids.has(m.project_id)) continue;
-      if (latest.get(m.id) === 'AUTHORIZED') held += m.amount_minor;
+      if (['HELD', 'AUTHORIZED'].includes(latest.get(m.id))) held += m.amount_minor;
       if (m.status === 'draft' || m.status === 'agreed') notFunded += m.amount_minor;
     }
     res.json({
@@ -698,7 +702,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const p = getProject(req.params.id);
     const ms = milestonesOf(p.id);
     if (ms.some((m) => VOIDABLE_STATES.includes(m.status))) {
-      throw E('ACTIVE_HOLDS', 'Money is on hold in this project. Finish or cancel that milestone first.', 409);
+      throw E('ACTIVE_HOLDS', 'Money is on hold in this project. Finish that milestone or agree a refund first.', 409);
     }
     if (ms.some((m) => m.status === 'paid' || m.status === 'refunded')) {
       throw E('HAS_PAYMENTS', 'This project has payments, so its record is kept. Archive it instead.', 409);
@@ -807,7 +811,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       const existing = d.payments.find((p) => p.milestone_id === m.id && p.status === 'CREATED');
       if (existing) return { order_id: existing.order_id, status: 'CREATED' };
       const attempt = d.payments.filter((p) => p.milestone_id === m.id).length + 1;
-      const order = await pp(() => paypal.createAuthOrder(m, attempt));
+      const order = await pp(() => paypal.createCaptureOrder(m, attempt));
       d.payments.push({
         id: db.id('pay'), project_id: m.project_id, milestone_id: m.id, order_id: order.id, attempt,
         authorization_id: null, expires_at: null, capture_id: null, status: 'CREATED', created_at: now(),
@@ -827,15 +831,18 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const payload = await once(`auth:${pay.order_id}`, async () => {
       if (pay.status !== 'CREATED') return { milestone: milestoneView(m), payment: paymentView(pay) }; // repeat call
       fundable(m);
-      const a = await pp(() => paypal.authorizeOrder(pay.order_id));
+      // The client is charged here. The captured money stays on the Milestone Pay account, with no expiry, until
+      // the client approves the work (payout) or both sides agree a refund.
+      const c = await pp(() => paypal.captureOrder(pay.order_id));
+      if (!['COMPLETED', 'PENDING'].includes(c.status)) throw E('PAYPAL_ERROR', 'PayPal did not complete the payment. Nothing was charged; please try again.', 502);
       db.transition(m, 'authorized');
-      Object.assign(pay, { status: 'AUTHORIZED', authorization_id: a.authorization_id, expires_at: a.expires_at || null, payer_user_id: req.actorUserId });
+      Object.assign(pay, { status: 'HELD', capture_id: c.capture_id, expires_at: null, payer_user_id: req.actorUserId });
       db.save();
       db.ledgerAdd({
-        project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'AUTHORIZED',
-        paypal_id: a.authorization_id, amount_minor: m.amount_minor,
+        project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'HELD',
+        paypal_id: c.capture_id, amount_minor: m.amount_minor,
       });
-      db.activity(m.project_id, 'pp', `${m.label} ${money(m.amount_minor, m.currency)} is held by Milestone Pay (PayPal authorization ${a.authorization_id})`);
+      db.activity(m.project_id, 'pp', `${m.label} ${money(m.amount_minor, m.currency)} is held by Milestone Pay (PayPal capture ${c.capture_id})`);
       db.notify(m.project_id, 'freelancer', `${m.label} is funded. ${money(m.amount_minor, m.currency)} is held by Milestone Pay, so you can start "${m.title}".`);
       return { milestone: milestoneView(m), payment: paymentView(pay) };
     });
@@ -983,7 +990,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   r.post('/proposals/:id/approve', need('proposal', 'client'), async (req, res) => {
     const prop = getProposal(req.params.id);
     const m = getMilestone(prop.milestone_id);
-    // One lock per milestone for approve and cancel: a double click or a racing cancel cannot capture twice.
+    // One lock per milestone for approve and refund: a double click or a racing refund cannot move the money twice.
     const out = await once(`approve:${m.id}`, () => serial(`money:${m.id}`, async () => {
       if (prop.action !== 'release') throw E('PROPOSAL_NOT_PENDING', 'This proposal is not a release proposal.', 409);
       if (prop.status === 'pending') {
@@ -994,7 +1001,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         db.save();
         db.activity(m.project_id, 'client', `${m.label}: client approved the work and the release of ${money(m.amount_minor, m.currency)}`);
       } else if (prop.status === 'approved' && m.status === 'submitted') {
-        // an earlier attempt failed at PayPal: retry (same PayPal-Request-Id, so PayPal cannot double capture)
+        // an earlier attempt failed at PayPal: retry (the payout batch id is fixed, so PayPal cannot pay twice)
       } else if (prop.status === 'executed' || prop.status === 'approved') {
         // already done: return the first result
       } else {
@@ -1005,7 +1012,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
         run = await runAgent('proposal.approved', m.id);
         prop.run_id = run.id;
         db.save();
-        if (m.status !== 'paid') throw moneyFailure(run, 'capture_authorization');
+        if (m.status !== 'paid') throw moneyFailure(run, 'release_payment');
       }
       const pay = lastPayment(m);
       return {
@@ -1017,42 +1024,91 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json(out);
   });
 
-  r.post('/proposals/:id/cancel', need('proposal', 'client'), async (req, res) => {
-    const prop = getProposal(req.params.id);
-    const m = getMilestone(prop.milestone_id);
-    const out = await once(`cancel:${m.id}`, () => serial(`money:${m.id}`, async () => {
+  // ---- Refund: the money leaves the hold early only when the client asks and the freelancer accepts ----------
+  const refundProposal = (id) => {
+    const prop = getProposal(id);
+    if (prop.action !== 'refund') throw E('PROPOSAL_NOT_PENDING', 'This is not a refund request.', 409);
+    return prop;
+  };
+
+  r.post('/milestones/:id/refund-request', need('milestone', 'client'), async (req, res) => {
+    const m = getMilestone(req.params.id); // request body is ignored on purpose
+    const out = await once(`refundreq:${m.id}`, () => serial(`money:${m.id}`, async () => {
+      if (!VOIDABLE_STATES.includes(m.status)) throw E('NOT_HELD', 'There is no held payment to refund on this milestone.', 409);
       const d = D();
-      const existingVoid = d.proposals.find((p) => p.milestone_id === m.id && p.action === 'void' && ['approved', 'executed'].includes(p.status));
-      if (m.status === 'voided' && existingVoid) {
-        return { milestone: milestoneView(m), payment: { status: 'VOIDED' }, agent_run: runById(existingVoid.run_id) };
-      }
-      if (prop.action !== 'release' || !['pending', 'withdrawn'].includes(prop.status)) {
-        throw E('PROPOSAL_NOT_PENDING', 'This proposal cannot be cancelled.', 409);
-      }
-      db.transition({ ...m }, 'voided'); // throws ILLEGAL_TRANSITION unless authorized/submitted/revision_requested
-      for (const p of d.proposals) if (p.milestone_id === m.id && p.action === 'release' && p.status === 'pending') p.status = 'withdrawn';
-      let vp = existingVoid;
-      if (!vp) {
-        vp = {
-          id: db.id('prop'), project_id: m.project_id, milestone_id: m.id, action: 'void', status: 'approved',
-          reason: 'Client cancelled the milestone', approved_by: 'client', approved_by_user: req.actorUserId, created_at: now(),
+      let prop = d.proposals.find((p) => p.milestone_id === m.id && p.action === 'refund' && ['pending', 'approved'].includes(p.status));
+      if (!prop) {
+        prop = {
+          id: db.id('prop'), project_id: m.project_id, milestone_id: m.id, action: 'refund', status: 'pending',
+          reason: 'Client asked for a refund of the held payment', requested_by: 'client', requested_by_user: req.actorUserId,
+          approved_by: null, created_at: now(),
         };
-        d.proposals.push(vp);
+        d.proposals.push(prop);
+        db.save();
+        db.activity(m.project_id, 'client', `${m.label}: client asked for a refund of ${money(m.amount_minor, m.currency)}. The money stays held until the freelancer answers.`);
+        db.notify(m.project_id, 'freelancer', `The client asked for a refund of ${m.label} (${money(m.amount_minor, m.currency)}). Accept to cancel ${m.label} and send the money back, or decline to keep working.`);
       }
+      return { milestone: milestoneView(m), refund_request: proposalView(prop) };
+    }));
+    res.status(201).json(out);
+  });
+
+  r.post('/proposals/:id/withdraw-refund', need('proposal', 'client'), async (req, res) => {
+    const prop = refundProposal(req.params.id);
+    const m = getMilestone(prop.milestone_id);
+    const out = await serial(`money:${m.id}`, async () => {
+      if (prop.status !== 'pending') throw E('PROPOSAL_NOT_PENDING', 'This refund request is no longer waiting for an answer.', 409);
+      prop.status = 'withdrawn';
       db.save();
-      db.activity(m.project_id, 'client', `${m.label}: client cancelled the milestone and asked for the hold to be released`);
-      const run = await runAgent('proposal.voided', m.id);
-      vp.run_id = run.id;
+      db.activity(m.project_id, 'client', `${m.label}: client withdrew the refund request. The money stays held.`);
+      db.notify(m.project_id, 'freelancer', `The client withdrew the refund request for ${m.label}. The money stays held.`);
+      return { milestone: milestoneView(m), refund_request: proposalView(prop) };
+    });
+    res.json(out);
+  });
+
+  r.post('/proposals/:id/decline-refund', need('proposal', 'freelancer'), async (req, res) => {
+    const prop = refundProposal(req.params.id);
+    const m = getMilestone(prop.milestone_id);
+    const out = await serial(`money:${m.id}`, async () => {
+      if (prop.status !== 'pending') throw E('PROPOSAL_NOT_PENDING', 'This refund request is no longer waiting for an answer.', 409);
+      Object.assign(prop, { status: 'declined', declined_by_user: req.actorUserId });
       db.save();
-      if (m.status !== 'voided') throw moneyFailure(run, 'void_authorization');
-      return { milestone: milestoneView(m), payment: { status: 'VOIDED' }, agent_run: run };
+      db.activity(m.project_id, 'free', `${m.label}: freelancer declined the refund request. The money stays held.`);
+      db.notify(m.project_id, 'client', `Your refund request for ${m.label} was declined. ${money(m.amount_minor, m.currency)} stays held by Milestone Pay.`);
+      return { milestone: milestoneView(m), refund_request: proposalView(prop) };
+    });
+    res.json(out);
+  });
+
+  r.post('/proposals/:id/accept-refund', need('proposal', 'freelancer'), async (req, res) => {
+    const prop = refundProposal(req.params.id);
+    const m = getMilestone(prop.milestone_id);
+    const out = await once(`refund:${m.id}`, () => serial(`money:${m.id}`, async () => {
+      const pay = () => paymentView(lastPayment(m));
+      if (prop.status === 'executed' && m.status === 'voided') { // already done: return the first result
+        return { milestone: milestoneView(m), payment: pay(), agent_run: runById(prop.run_id) };
+      }
+      if (!VOIDABLE_STATES.includes(m.status)) throw E('NOT_HELD', 'There is no held payment to refund on this milestone.', 409);
+      if (prop.status === 'pending') {
+        Object.assign(prop, { status: 'approved', approved_by: 'freelancer', approved_by_user: req.actorUserId });
+        db.save();
+        db.activity(m.project_id, 'free', `${m.label}: freelancer accepted the refund request`);
+      } else if (prop.status !== 'approved') { // approved = an earlier attempt failed at PayPal: retry (same PayPal-Request-Id)
+        throw E('PROPOSAL_NOT_PENDING', 'This refund request is no longer waiting for an answer.', 409);
+      }
+      const run = await runAgent('proposal.refund_accepted', m.id);
+      prop.run_id = run.id;
+      db.save();
+      if (m.status !== 'voided') throw moneyFailure(run, 'refund_payment');
+      return { milestone: milestoneView(m), payment: pay(), agent_run: run };
     }));
     res.json(out);
   });
 
   r.post('/agent/run', need('milestone', null, bodyMilestone), async (req, res) => {
     const { event, milestone_id } = req.body || {};
-    if (!['milestone.submitted', 'proposal.approved', 'proposal.voided'].includes(event)) throw E('BAD_EVENT', 'Unknown agent event.');
+    if (!['milestone.submitted', 'proposal.approved', 'proposal.refund_accepted'].includes(event)) throw E('BAD_EVENT', 'Unknown agent event.');
     const m = getMilestone(String(milestone_id ?? ''));
     const agent_run = await serial(`money:${m.id}`, () => runAgent(event, m.id, req.body?.forceFallback === true ? { forceFallback: true } : {}));
     res.json({ agent_run });
@@ -1218,23 +1274,25 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
       if (lastPaymentOf(m.id)?.id !== pay.id) continue; // only the latest attempt drives the milestone
       if (pay.payout_status === 'FAILED') await agent.payoutFor?.(m.id, { paypal }); // retry sending a captured payment on
       try {
-        if (cap?.status === 'COMPLETED' && m.status === 'submitted') {
+        if (pay.status === 'AUTHORIZED' && cap?.status === 'COMPLETED' && m.status === 'submitted') { // older authorization, captured
           db.transition(m, 'paid');
           Object.assign(pay, { capture_id: cap.id, status: 'CAPTURED', authorization_id: pay.authorization_id || auth?.id || null });
           db.save();
           db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'CAPTURED', paypal_id: cap.id, amount_minor: m.amount_minor });
           db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the funds were captured (refresh)`);
-        } else if (!cap && ['VOIDED', 'EXPIRED'].includes(auth?.status) && VOIDABLE_STATES.includes(m.status)) {
+        } else if (pay.status === 'AUTHORIZED' && !cap && ['VOIDED', 'EXPIRED'].includes(auth?.status) && VOIDABLE_STATES.includes(m.status)) {
+          // Only an authorization made before capture-at-funding can lapse at PayPal. A captured payment never does.
           db.transition(m, 'voided');
           pay.status = 'VOIDED';
           db.save();
           db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'VOIDED', paypal_id: auth.id, amount_minor: m.amount_minor });
           db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the authorization is ${auth.status.toLowerCase()} (refresh)`);
-        } else if (pay.status === 'CREATED' && auth?.id && ['CREATED', 'PENDING'].includes(auth.status) && m.status === 'agreed') {
+        } else if (pay.status === 'CREATED' && cap?.id && ['COMPLETED', 'PENDING'].includes(cap.status) && m.status === 'agreed') {
+          // The capture went through at PayPal but our answer to the browser was lost.
           db.transition(m, 'authorized');
-          Object.assign(pay, { status: 'AUTHORIZED', authorization_id: auth.id, expires_at: auth.expiration_time || null });
+          Object.assign(pay, { status: 'HELD', capture_id: cap.id, expires_at: null });
           db.save();
-          db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'AUTHORIZED', paypal_id: auth.id, amount_minor: m.amount_minor });
+          db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'HELD', paypal_id: cap.id, amount_minor: m.amount_minor });
           db.activity(m.project_id, 'pp', `${m.label}: PayPal shows the funds are held (refresh)`);
         }
       } catch (err) {
@@ -1451,7 +1509,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const d = D();
     const uid = req.user.id;
     if (hasHolds(uid)) {
-      throw E('ACTIVE_HOLDS', 'Money is on hold in one of your projects. Approve or cancel those milestones first.', 409);
+      throw E('ACTIVE_HOLDS', 'Money is on hold in one of your projects. Approve those milestones or agree a refund first.', 409);
     }
     const u = d.users.find((x) => x.id === uid);
     u.delete_requested_at = now();

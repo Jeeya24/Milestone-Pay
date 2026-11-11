@@ -2,7 +2,7 @@
 import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, pageHead, alertBox, errBox, loading, skeleton, toast, confirmDialog,
   money, moneyEl, fmtNum, fmtDate, fmtDay, plural, initial, badge, msBadge, projectBadge, nextStep, emptyState, stat, progress, msCard, fileRow,
-  poll, stopPoll, names, planBase, curOf, sandboxNote, titleOf, chatCard, personChip, invoiceLinks,
+  poll, stopPoll, names, planBase, curOf, sandboxNote, titleOf, chatCard, personChip, invoiceLinks, wasRefunded,
 } from './core.js';
 import { notesBox, holdWarning, projectActions, archivedList } from './freelancer.js';
 import { nextFor, nextCard } from './project.js';
@@ -131,7 +131,7 @@ function loadPayPalSdk() {
   if (sdkPromise) return sdkPromise;
   sdkPromise = new Promise((resolve, reject) => {
     if (!S.cfg?.paypal_client_id) return reject(new Error('PayPal isn’t set up on this server yet.'));
-    const q = new URLSearchParams({ 'client-id': S.cfg.paypal_client_id, intent: 'authorize', currency: S.cfg.api_currency || S.cfg.currency || 'USD', components: 'buttons', 'disable-funding': 'card,credit,paylater,venmo' });
+    const q = new URLSearchParams({ 'client-id': S.cfg.paypal_client_id, intent: 'capture', currency: S.cfg.api_currency || S.cfg.currency || 'USD', components: 'buttons', 'disable-funding': 'card,credit,paylater,venmo' });
     const nonce = document.querySelector('meta[name="csp-nonce"]')?.content || '';
     const s = el('script', { src: `https://www.paypal.com/sdk/js?${q}`, 'data-csp-nonce': nonce || null });
     if (nonce) s.nonce = nonce;
@@ -174,7 +174,7 @@ function fundBlock(m, d) {
     } catch { /* not localhost */ }
   })();
   const usd = (S.cfg?.api_currency || 'USD') !== cur ? alertBox('warn', 'info', el('b', {}, `PayPal will hold this in ${S.cfg.api_currency}. `), 'Your bank may add a conversion fee.') : null;
-  return el('div', { class: 'mp-stack mp-stack--3', style: 'margin-top:12px' }, usd, msg, el('div', { class: 'mp-paypal' }, host, el('div', { class: 'mp-paypal__note' }, 'Milestone Pay holds this amount. It’s paid out only when you approve the work.')), helper);
+  return el('div', { class: 'mp-stack mp-stack--3', style: 'margin-top:12px' }, usd, msg, el('div', { class: 'mp-paypal' }, host, el('div', { class: 'mp-paypal__note' }, 'You’re charged now. Milestone Pay holds the money and pays it out only when you approve the work.')), helper);
 }
 function quoteCard(c, d) {
   const { fname } = names(d); const cur = curOf(d); const sv = c.sent_version || {};
@@ -212,13 +212,13 @@ export function viewPayments(d, keep = false) {
     : f === 'declined' ? alertBox('info', 'x', 'Declined. The agreement stays as it was.')
       : f?.startsWith('added:') ? alertBox('success', 'check', el('b', {}, `${f.slice(6)} added. `), 'Nothing was charged. You fund it after the parts before it.')
         : f === 'paid' && lastPaid ? alertBox('success', 'check', el('b', {}, money(lastPaid.amount_minor, cur)), ` paid to ${fname} for ${lastPaid.label}.`)
-          : f === 'cancelled' ? alertBox('info', 'info', 'Cancelled. You weren’t charged and the hold is released.')
+          : f === 'refundasked' ? alertBox('info', 'clock', el('b', {}, `Refund request sent to ${fname}. `), 'Your money stays held by Milestone Pay until they answer.')
             : f === 'revision' ? alertBox('success', 'check', `Sent to ${fname}. Your money stays held by Milestone Pay while they revise.`)
               : f === 'request' ? alertBox('success', 'check', `Request sent to ${fname}. You’ll get a price here if it’s new work. Nothing changes until you accept.`) : null;
   const cards = ms.map((m) => {
     let body = null;
     if (m.fundable) body = fundBlock(m, d);
-    else if (['authorized', 'revision_requested'].includes(m.status)) body = alertBox('held', 'lock', `Milestone Pay is holding this until you approve the work.${m.payment?.expires_at ? ` Held until ${fmtDay(m.payment.expires_at)}.` : ''}`);
+    else if (['authorized', 'revision_requested'].includes(m.status)) body = alertBox('held', 'lock', `Milestone Pay is holding this until you approve the work.${m.refund_request?.status === 'pending' ? ` You asked for a refund. Waiting for ${fname} to answer.` : ''}`);
     else if (m.status === 'submitted') body = el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, el('span', { class: 'mp-t-sm' }, el('b', {}, `${fname} delivered ${m.label}. `), 'Check the files, then pay or ask for changes.'),
       link(`/p/${pid}/m/${m.id}`, { class: 'mp-btn mp-btn--primary mp-btn--sm' }, `Review ${m.label}`, icon('arrow-right')));
     return msCard(m, { cur, fname, base, current: m.is_current && m.status !== 'voided' && m.status !== 'paid', body, href: ['submitted', 'paid', 'revision_requested', 'authorized'].includes(m.status) ? `/p/${pid}/m/${m.id}` : null });
@@ -259,6 +259,41 @@ export function viewPayments(d, keep = false) {
   poll(pid, () => d, (x) => { if (document.querySelector('.mp-pp-host iframe')) return; d = x; viewPayments(x, true); }, () => C.busy);
 }
 
+/**
+ * Refund of a held payment. The client can only ask: the money goes back when the freelancer accepts,
+ * and stays held by Milestone Pay otherwise.
+ */
+function refundBlock(m, d, redraw) {
+  if (!['authorized', 'submitted', 'revision_requested'].includes(m.status)) return null;
+  const { fname } = names(d); const cur = curOf(d); const pid = d.project.id; const rq = m.refund_request;
+  const amt = money(m.amount_minor, cur);
+  const reload = async () => redraw(await api(`/api/projects/${pid}`).catch(() => d));
+  if (rq?.status === 'pending') {
+    return el('div', { class: 'mp-stack', id: 'refundBox' },
+      alertBox('held', 'clock', el('b', {}, 'Refund requested. '), `Waiting for ${fname} to answer. Your ${amt} stays held by Milestone Pay until then.`),
+      el('button', { class: 'mp-btn mp-btn--ghost mp-btn--block', id: 'refundWithdraw', disabled: C.busy, onclick: async () => {
+        C.busy = true;
+        try { await api(`/api/proposals/${rq.id}/withdraw-refund`, { body: {} }); toast('Refund request withdrawn. Your money stays held.', 'check'); }
+        catch (e) { toast(e.message, 'alert'); }
+        C.busy = false; reload();
+      } }, 'Withdraw refund request'));
+  }
+  if (rq?.status === 'approved') return el('div', { id: 'refundBox' }, alertBox('info', 'clock', el('b', {}, `${fname} accepted the refund. `), `${amt} is being sent back to your PayPal.`));
+  const later = d.milestones.filter((x) => x.seq > m.seq).map((x) => x.label);
+  return el('div', { class: 'mp-stack', id: 'refundBox' },
+    rq?.status === 'declined' ? alertBox('info', 'info', `${fname} declined your refund request. Your ${amt} stays held by Milestone Pay.`) : null,
+    el('button', { class: 'mp-btn mp-btn--danger-quiet mp-btn--block', id: 'refundAsk', disabled: C.busy, onclick: async () => {
+      const ok = await confirmDialog({ icon: 'undo', iconKind: 'issue', title: `Ask ${fname} for a refund of ${m.label}?`,
+        text: `If ${fname} accepts, ${m.label} is cancelled and ${amt} goes back to your PayPal${later.length ? `. ${later.join(' and ')} won’t start` : ''}. Until ${fname} accepts, the money stays held by Milestone Pay.`,
+        rows: [['Milestone', `${m.label} · ${m.title}`], ['Refund if accepted', amt]], confirm: 'Ask for a refund', cancel: `Keep ${m.label}` });
+      if (!ok) return;
+      C.busy = true;
+      try { await api(`/api/milestones/${m.id}/refund-request`, { body: {} }); C.busy = false; C.flash = 'refundasked'; return viewPayments(await api(`/api/projects/${pid}`)); }
+      catch (e) { toast(e.message, 'alert'); }
+      C.busy = false; reload();
+    } }, 'Ask for a refund'));
+}
+
 // ---------------------------------------------------------------- 07 Review and pay
 export function viewReview(d, mid) {
   const m = d.milestones.find((x) => x.id === mid);
@@ -271,10 +306,13 @@ export function viewReview(d, mid) {
         el('div', {}, msBadge(m)),
         m.status === 'paid' && m.invoice ? el('div', { class: 'mp-card mp-card--raised' }, invoiceLinks(m)) : null,
         m.status === 'paid' && !m.invoice ? el('p', { class: 'mp-t-sm mp-muted' }, `The invoice appears here once the payment has reached ${fname}’s PayPal.`) : null,
-        m.status === 'paid' ? alertBox('success', 'check', `You paid ${fname} ${money(m.amount_minor, cur)} for ${m.label}.`) : m.status === 'revision_requested' ? alertBox('held', 'lock', `${fname} is revising. Your note: “${m.rev_note || ''}”`) : null,
+        m.status === 'paid' ? alertBox('success', 'check', `You paid ${fname} ${money(m.amount_minor, cur)} for ${m.label}.`) : m.status === 'revision_requested' ? alertBox('held', 'lock', `${fname} is revising. Your note: “${m.rev_note || ''}”`)
+          : m.status === 'authorized' ? alertBox('held', 'lock', `Milestone Pay is holding ${money(m.amount_minor, cur)} until you approve the work.`)
+            : m.status === 'voided' ? alertBox('info', 'undo', wasRefunded(m) ? `${m.label} was cancelled and ${money(m.amount_minor, cur)} was refunded to your PayPal.` : `${m.label} was cancelled. You weren’t charged.`) : null,
         m.deliverables.length ? el('div', { class: 'mp-card mp-card--raised' }, m.deliverables.map((f) => fileRow(f))) : el('p', { class: 'mp-muted' }, 'No files delivered yet.'),
         m.status === 'revision_requested' ? chatCard(d, 'client', (x) => viewReview(x, mid)) : null,
-        link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, 'Back to payments'))));
+        link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, 'Back to payments'),
+        refundBlock(m, d, (x) => viewReview(x, mid)))));
   }
   const prop = m.proposal && m.proposal.action === 'release' && m.proposal.status === 'pending' ? m.proposal : null;
   const left = m.rev_limit != null ? Math.max(0, m.rev_limit - m.rev_count) : null;
@@ -287,7 +325,7 @@ export function viewReview(d, mid) {
     try { await api(`/api/proposals/${prop.id}/approve`, { body: {} }); C.busy = false; C.flash = 'paid'; viewPayments(await api(`/api/projects/${pid}`)); }
     catch (e) {
       C.busy = false;
-      const again = await confirmDialog({ icon: 'alert', iconKind: 'issue', title: 'Payment didn’t go through', text: `PayPal couldn’t complete it. No money moved. Your ${money(m.amount_minor, cur)} is still held safely by Milestone Pay${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}.`,
+      const again = await confirmDialog({ icon: 'alert', iconKind: 'issue', title: 'Payment didn’t go through', text: `PayPal couldn’t complete it. No money moved. Your ${money(m.amount_minor, cur)} is still held safely by Milestone Pay.`,
         rows: [[`${fname} received`, money(0, cur)], ['Still held for you', money(m.amount_minor, cur)]], body: el('p', { class: 'mp-t-caption mp-muted' }, e.message), confirm: 'Try again', confirmIcon: 'refresh', cancel: 'Not now' });
       if (again) return pay.click();
       viewReview(await api(`/api/projects/${pid}`).catch(() => d), mid);
@@ -296,18 +334,6 @@ export function viewReview(d, mid) {
   const reqBtn = left === 0
     ? el('button', { class: 'mp-btn mp-btn--secondary mp-btn--block', disabled: true }, 'Request changes · 0 left')
     : link(`/p/${pid}/m/${m.id}/changes`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, `Request changes${left != null ? ` · ${left} left` : ''}`);
-  const cancel = el('button', { class: 'mp-btn mp-btn--danger-quiet mp-btn--block', disabled: !prop || C.busy, onclick: async () => {
-    const later = d.milestones.filter((x) => x.seq > m.seq).map((x) => x.label);
-    const ok = await confirmDialog({ icon: 'alert', iconKind: 'issue', title: `Cancel ${m.label}? You won’t be charged.`,
-      text: `You won’t be charged for ${m.label}. ${fname} won’t be paid for this work${later.length ? `, and ${later.join(' and ')} won’t start` : ''}. This can’t be undone.`,
-      rows: [['Milestone', `${m.label} · ${m.title}`], ['You’re charged', money(0, cur)], [`${fname} receives`, money(0, cur)]], confirm: `Keep ${m.label}`, cancel: `Cancel ${m.label}`, cancelClass: 'mp-btn--danger' });
-    if (ok !== false) return; // only the red “Cancel” button cancels; Escape keeps it
-    C.busy = true;
-    try { await api(`/api/proposals/${prop.id}/cancel`, { body: {} }); C.flash = 'cancelled'; }
-    catch (e) { toast(e.message, 'alert'); }
-    C.busy = false;
-    viewPayments(await api(`/api/projects/${pid}`));
-  } }, `Cancel ${m.label} · you won’t be charged`);
   mount(appShell('client', back(`/p/${pid}`, 'Payments'),
     el('div', { class: 'mp-narrow mp-stack mp-stack--4' },
       el('div', { class: 'mp-stack', style: 'gap:2px' }, caption(d), el('h1', { class: 'mp-t-title' }, `Review ${m.label} · ${m.title}`)),
@@ -319,8 +345,8 @@ export function viewReview(d, mid) {
       !prop ? alertBox('info', 'clock', 'Getting the payment ready… this page updates by itself.') : null,
       el('div', { class: 'mp-stack mp-sticky-cta' }, pay, reqBtn,
         left === 0 ? el('p', { class: 'mp-t-caption mp-muted', style: 'text-align:center;font-weight:400' }, `You’ve used every revision round for ${m.label}. For more changes, `, link(`/p/${pid}/change`, { class: 'mp-link' }, 'request a change'), ` (${fname} may add a price).`) : null,
-        cancel))));
-  poll(pid, () => d, (x) => { const mm = x.milestones.find((y) => y.id === mid); if (!mm || mm.status !== m.status || !!mm.proposal !== !!m.proposal || mm.proposal?.status !== m.proposal?.status) viewReview(x, mid); }, () => C.busy);
+        refundBlock(m, d, (x) => viewReview(x, mid))))));
+  poll(pid, () => d, (x) => { const mm = x.milestones.find((y) => y.id === mid); if (!mm || mm.status !== m.status || !!mm.proposal !== !!m.proposal || mm.proposal?.status !== m.proposal?.status || mm.refund_request?.id !== m.refund_request?.id || mm.refund_request?.status !== m.refund_request?.status) viewReview(x, mid); }, () => C.busy);
 }
 
 /** “Request changes” on a delivered milestone (uses one revision round). */

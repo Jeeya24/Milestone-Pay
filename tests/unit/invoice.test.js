@@ -1,4 +1,4 @@
-// Invoices: one per milestone, only after it was funded, approved by the client, captured and paid out.
+// Invoices: one per milestone, only after it was funded, approved by the client and paid out.
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as db from '../../db.js';
@@ -58,7 +58,7 @@ test('no invoice at any step before the payout; one invoice after it, for both p
     assert.match(res.headers.get('content-type'), /^text\/html/);
     assert.match(res.headers.get('content-disposition'), /^inline; filename="INV-/);
     const html = await res.text();
-    for (const s of [fm.invoice.number, 'Paid in full', 'M1 · Part 1', '2,400.00 USD', 'Nok', 'ORDER1', 'CAP-AUTH-ORDER1', 'BATCH-1', 'Paid out to the freelancer']) assert.ok(html.includes(s), s);
+    for (const s of [fm.invoice.number, 'Paid in full', 'M1 · Part 1', '2,400.00 USD', 'Nok', 'ORDER1', 'CAP-ORDER1', 'BATCH-1', 'Paid out to the freelancer']) assert.ok(html.includes(s), s);
     // user text is escaped, and no email is printed
     assert.ok(html.includes('Ploy &lt;b&gt;Design&lt;/b&gt;') && !html.includes('<b>Design</b>'));
     assert.ok(!html.includes('test.local'));
@@ -76,7 +76,7 @@ test('no invoice at any step before the payout; one invoice after it, for both p
   assert.equal(db.load().activity.filter((a) => /invoice INV-/.test(a.text)).length, 1);
 });
 
-test('captured but not paid out: no invoice until the payout goes through', async () => {
+test('released but not paid out: no invoice until the payout goes through', async () => {
   let fail = true;
   await boot({ createPayout: async () => { if (fail) throw new Error('nope'); return { batch_id: 'BATCH-2', status: 'PENDING' }; } });
   const p = await approved(); const m = p.milestones[0];
@@ -97,7 +97,9 @@ test('a cancelled milestone never gets an invoice', async () => {
   await boot({ createPayout: async () => ({ batch_id: 'BATCH-3', status: 'PENDING' }) });
   const p = await approved(); const m = p.milestones[0];
   await fund(m); const sub = await deliver(m);
-  await C.call('POST', `/api/proposals/${sub.body.proposal.id}/cancel`);
+  const rq = await C.call('POST', `/api/milestones/${m.id}/refund-request`);
+  assert.equal((await F.call('POST', `/api/proposals/${rq.body.refund_request.id}/accept-refund`)).status, 200);
+  void sub;
   assert.equal((await ms(C, p.pid)).status, 'voided');
   assert.equal((await ms(C, p.pid)).invoice, null);
   assert.equal((await C.call('GET', `/api/milestones/${m.id}/invoice`)).status, 409);

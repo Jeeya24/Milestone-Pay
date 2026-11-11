@@ -2,8 +2,10 @@
 //
 // The model only ever receives the event name plus a state JSON (milestone, payment ids/status, proposals,
 // next milestone). Never chat, revision notes, change-request text or file names.
-// capture_authorization / void_authorization execute only against an APPROVED proposal row (checked below),
-// else they return { error: 'NO_APPROVAL' } and make zero PayPal calls. Notification text is fixed templates.
+// The client is charged when they fund a milestone; the captured money stays on the Milestone Pay account with no
+// expiry. release_payment (pay the freelancer out) and refund_payment (send it back to the client) execute only
+// against an APPROVED proposal row (checked below), else they return { error: 'NO_APPROVAL' } and make zero PayPal
+// calls. A release is approved by the client; a refund is asked for by the client and approved by the freelancer. Notification text is fixed templates.
 // If the model call fails, times out (8 s), is over budget, or ends without the required money tool, the same
 // sequence runs in code and the run is marked mode:'fallback'.
 import { generateText, tool } from 'ai';
@@ -19,9 +21,9 @@ export const AGENT_TIMEOUT_MS = 8000;
 // thought_signature (@ai-sdk/google v1 does not carry it), so the model gets ONE response in which it emits all
 // its tool calls (up to 4, run in order); anything it leaves out is completed by the code below.
 export const MAX_STEPS = 1;
-export const EVENTS = ['milestone.submitted', 'proposal.approved', 'proposal.voided'];
-const VOIDABLE = ['authorized', 'submitted', 'revision_requested'];
-export const NOTIFY_TEMPLATES = ['paid_freelancer', 'fund_next_client', 'voided_both', 'review_client', 'problem_freelancer'];
+export const EVENTS = ['milestone.submitted', 'proposal.approved', 'proposal.refund_accepted'];
+const HELD_STATES = ['authorized', 'submitted', 'revision_requested'];
+export const NOTIFY_TEMPLATES = ['paid_freelancer', 'fund_next_client', 'refunded_both', 'review_client', 'problem_freelancer'];
 
 const now = () => new Date().toISOString();
 const usd = (minor, cur = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur }).format(minor / 100);
@@ -68,38 +70,47 @@ const single = (key, fn) => {
 
 const paypalFail = (err) => ({ error: 'PAYPAL_ERROR', message: String(err?.message || err).slice(0, 200), paypal_debug_id: err?.paypal_debug_id ?? null });
 
-export async function captureExecutor({ milestone_id, proposal_id }, { paypal = realPaypal } = {}) {
+/**
+ * Release a held payment to the freelancer. The money was captured when the client funded the milestone, so this
+ * makes no capture call: it marks the payment released and sends the payout. Payments made before capture-at-funding
+ * are still PayPal authorizations (status AUTHORIZED) and are captured here first.
+ */
+export async function releaseExecutor({ milestone_id, proposal_id }, { paypal = realPaypal } = {}) {
   const d = db.load();
   const m = d.milestones.find((x) => x.id === milestone_id);
   const prop = typeof proposal_id === 'string' ? d.proposals.find((p) => p.id === proposal_id) : null;
   if (!m || !prop || prop.milestone_id !== m.id || prop.action !== 'release' || !['approved', 'executed'].includes(prop.status)) {
     return { error: 'NO_APPROVAL' };
   }
-  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && (p.status === 'CAPTURED' || p.status === 'AUTHORIZED'));
+  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && ['CAPTURED', 'HELD', 'AUTHORIZED'].includes(p.status));
   if (pay?.status === 'CAPTURED' && pay.capture_id) return { ok: true, capture_id: pay.capture_id, status: 'CAPTURED', already: true };
   if (prop.status !== 'approved' || m.status !== 'submitted' || !approvedByClient(prop, m)) return { error: 'NO_APPROVAL' };
-  if (!pay?.authorization_id) return { error: 'NO_AUTHORIZATION' };
+  if (!pay || (pay.status === 'HELD' ? !pay.capture_id : !pay.authorization_id)) return { error: 'NO_PAYMENT' };
 
-  return single(`cap:${pay.authorization_id}`, async () => {
+  return single(`rel:${pay.id || pay.order_id}`, async () => {
     if (pay.status === 'CAPTURED') return { ok: true, capture_id: pay.capture_id, status: 'CAPTURED', already: true };
-    let cap;
-    try { cap = await paypal.captureAuth(pay.authorization_id); } catch (err) { return paypalFail(err); }
-    if (!['COMPLETED', 'PENDING'].includes(cap?.status)) return { error: 'PAYPAL_ERROR', message: `Capture status ${cap?.status}`, paypal_debug_id: null };
+    if (pay.status === 'AUTHORIZED') { // funded before capture-at-funding
+      let cap;
+      try { cap = await paypal.captureAuth(pay.authorization_id); } catch (err) { return paypalFail(err); }
+      if (!['COMPLETED', 'PENDING'].includes(cap?.status)) return { error: 'PAYPAL_ERROR', message: `Capture status ${cap?.status}`, paypal_debug_id: null };
+      pay.capture_id = cap.id;
+    }
     db.transition(m, 'paid');
-    Object.assign(pay, { capture_id: cap.id, status: 'CAPTURED' });
+    pay.status = 'CAPTURED';
     prop.status = 'executed';
+    for (const p of d.proposals) if (p.milestone_id === m.id && p.action === 'refund' && p.status === 'pending') p.status = 'withdrawn';
     db.save();
-    db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'CAPTURED', paypal_id: cap.id, amount_minor: m.amount_minor });
-    db.activity(m.project_id, 'agent', `${m.label} ${usd(m.amount_minor, m.currency)} captured and released to the freelancer (capture ${cap.id})`);
+    db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'CAPTURED', paypal_id: pay.capture_id, amount_minor: m.amount_minor });
+    db.activity(m.project_id, 'agent', `${m.label} ${usd(m.amount_minor, m.currency)} released to the freelancer (capture ${pay.capture_id})`);
     const payout = await payoutFor(m.id, { paypal });
-    return { ok: true, capture_id: cap.id, status: 'CAPTURED', payout: payout.status };
+    return { ok: true, capture_id: pay.capture_id, status: 'CAPTURED', payout: payout.status };
   });
 }
 
 /**
  * Milestone Pay holds the client's payment; once it is captured this sends it on to the freelancer's own PayPal
- * (the email they log in with). Same gate as the capture: the milestone must be paid through an executed release
- * proposal. Never throws and never undoes the capture: a failed payout is recorded and retried from
+ * (the email they log in with). Same gate as the release: the milestone must be paid through an executed release
+ * proposal. Never throws and never undoes the release: a failed payout is recorded and retried from
  * "Check with PayPal". The batch id is derived from the capture id, so PayPal cannot pay it twice.
  */
 export async function payoutFor(milestoneId, { paypal = realPaypal } = {}) {
@@ -136,29 +147,45 @@ export async function payoutFor(milestoneId, { paypal = realPaypal } = {}) {
   });
 }
 
-export async function voidExecutor({ milestone_id, proposal_id }, { paypal = realPaypal } = {}) {
+/**
+ * Send a held payment back to the client. Needs a refund proposal the client asked for and the freelancer approved.
+ * A payment captured at funding is refunded; an older PayPal authorization is voided instead (never charged).
+ */
+export async function refundExecutor({ milestone_id, proposal_id }, { paypal = realPaypal } = {}) {
   const d = db.load();
   const m = d.milestones.find((x) => x.id === milestone_id);
   const prop = typeof proposal_id === 'string' ? d.proposals.find((p) => p.id === proposal_id) : null;
-  if (!m || !prop || prop.milestone_id !== m.id || prop.action !== 'void' || !['approved', 'executed'].includes(prop.status)) {
+  if (!m || !prop || prop.milestone_id !== m.id || prop.action !== 'refund' || !['approved', 'executed'].includes(prop.status)) {
     return { error: 'NO_APPROVAL' };
   }
-  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && (p.status === 'VOIDED' || p.status === 'AUTHORIZED'));
-  if (pay?.status === 'VOIDED' && m.status === 'voided') return { ok: true, status: 'VOIDED', already: true };
-  if (prop.status !== 'approved' || !VOIDABLE.includes(m.status) || !approvedByClient(prop, m)) return { error: 'NO_APPROVAL' };
-  if (!pay?.authorization_id) return { error: 'NO_AUTHORIZATION' };
+  const pay = [...d.payments].reverse().find((p) => p.milestone_id === m.id && ['REFUNDED', 'VOIDED', 'HELD', 'AUTHORIZED'].includes(p.status));
+  if (['REFUNDED', 'VOIDED'].includes(pay?.status) && m.status === 'voided') return { ok: true, status: pay.status, already: true };
+  if (prop.status !== 'approved' || !HELD_STATES.includes(m.status) || !refundAgreed(prop, m)) return { error: 'NO_APPROVAL' };
+  if (!pay || (pay.status === 'HELD' ? !pay.capture_id : !pay.authorization_id)) return { error: 'NO_PAYMENT' };
 
-  return single(`void:${pay.authorization_id}`, async () => {
-    if (pay.status === 'VOIDED') return { ok: true, status: 'VOIDED', already: true };
-    try { await paypal.voidAuth(pay.authorization_id); } catch (err) { return paypalFail(err); }
+  return single(`refund:${pay.id || pay.order_id}`, async () => {
+    if (['REFUNDED', 'VOIDED'].includes(pay.status)) return { ok: true, status: pay.status, already: true };
+    let paypalId; let event;
+    if (pay.status === 'HELD') {
+      let rf;
+      try { rf = await paypal.refundCapture(pay.capture_id); } catch (err) { return paypalFail(err); }
+      if (!['COMPLETED', 'PENDING'].includes(rf?.status)) return { error: 'PAYPAL_ERROR', message: `Refund status ${rf?.status}`, paypal_debug_id: null };
+      Object.assign(pay, { status: 'REFUNDED', refund_id: rf.id });
+      paypalId = rf.id; event = 'REFUNDED';
+    } else { // funded before capture-at-funding: release the authorization, the client was never charged
+      try { await paypal.voidAuth(pay.authorization_id); } catch (err) { return paypalFail(err); }
+      pay.status = 'VOIDED';
+      paypalId = pay.authorization_id; event = 'VOIDED';
+    }
     db.transition(m, 'voided');
-    pay.status = 'VOIDED';
     prop.status = 'executed';
     for (const p of d.proposals) if (p.milestone_id === m.id && p.status === 'pending') p.status = 'withdrawn';
     db.save();
-    db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event: 'VOIDED', paypal_id: pay.authorization_id, amount_minor: m.amount_minor });
-    db.activity(m.project_id, 'agent', `${m.label} authorization voided; the hold is returned to the client`);
-    return { ok: true, status: 'VOIDED' };
+    db.ledgerAdd({ project_id: m.project_id, milestone_id: m.id, label: m.label, event, paypal_id: paypalId, amount_minor: m.amount_minor });
+    db.activity(m.project_id, 'agent', event === 'REFUNDED'
+      ? `${m.label} ${usd(m.amount_minor, m.currency)} refunded to the client (refund ${paypalId})`
+      : `${m.label} authorization voided; the hold is returned to the client`);
+    return { ok: true, status: pay.status };
   });
 }
 
@@ -178,11 +205,16 @@ function renderNotify(template, m) {
           ? `${m.label} is paid. Fund ${next.label} ${next.title} (${usd(next.amount_minor, next.currency)}) so ${free} can start.`
           : `${m.label} is paid. Every milestone in this project is now paid.`,
       }];
-    case 'voided_both':
-      return [
-        { to: 'client', text: `${m.label} was cancelled. The ${usd(m.amount_minor, m.currency)} hold on your PayPal account has been released.` },
-        { to: 'freelancer', text: `${m.label} was cancelled by the client. The ${usd(m.amount_minor, m.currency)} hold was released and no payment will be made for it.` },
+    case 'refunded_both': {
+      const amt = usd(m.amount_minor, m.currency);
+      return paymentOf(m)?.status === 'REFUNDED' ? [
+        { to: 'client', text: `${m.label} was cancelled. ${amt} has been refunded to your PayPal account.` },
+        { to: 'freelancer', text: `${m.label} was cancelled. You accepted the refund request, so ${amt} went back to the client and no payment will be made for it.` },
+      ] : [
+        { to: 'client', text: `${m.label} was cancelled. The ${amt} hold on your PayPal account has been released.` },
+        { to: 'freelancer', text: `${m.label} was cancelled. You accepted the refund request, so the ${amt} hold was released and no payment will be made for it.` },
       ];
+    }
     case 'review_client':
       return [{ to: 'client', text: `${m.label} was delivered. Review the files and approve to pay ${usd(m.amount_minor, m.currency)}.` }];
     case 'problem_freelancer':
@@ -199,7 +231,7 @@ function notifyExecutor({ milestone_id, template }) {
   // A template may only describe something that actually happened.
   const applies = {
     paid_freelancer: m.status === 'paid', fund_next_client: m.status === 'paid',
-    voided_both: m.status === 'voided', review_client: m.status === 'submitted', problem_freelancer: true,
+    refunded_both: m.status === 'voided', review_client: m.status === 'submitted', problem_freelancer: true,
   }[template];
   if (!applies) return { error: 'NOT_APPLICABLE' };
   const d = db.load();
@@ -272,10 +304,10 @@ function makeCtx(event, m, paypal) {
   ctx.exec = {
     get_order: () => ctx.step('get_order', {}, () => getOrderExecutor({ milestone_id: m.id }, { paypal })),
     propose_release: () => ctx.step('propose_release', {}, () => proposeExecutor({ milestone_id: m.id }), ['milestone.submitted']),
-    capture_authorization: (proposal_id) => ctx.step('capture_authorization', { proposal_id },
-      () => captureExecutor({ milestone_id: m.id, proposal_id }, { paypal }), ['proposal.approved']),
-    void_authorization: (proposal_id) => ctx.step('void_authorization', { proposal_id },
-      () => voidExecutor({ milestone_id: m.id, proposal_id }, { paypal }), ['proposal.voided']),
+    release_payment: (proposal_id) => ctx.step('release_payment', { proposal_id },
+      () => releaseExecutor({ milestone_id: m.id, proposal_id }, { paypal }), ['proposal.approved']),
+    refund_payment: (proposal_id) => ctx.step('refund_payment', { proposal_id },
+      () => refundExecutor({ milestone_id: m.id, proposal_id }, { paypal }), ['proposal.refund_accepted']),
     notify: (template) => ctx.step('notify', { template }, () => notifyExecutor({ milestone_id: m.id, template })),
   };
   return ctx;
@@ -283,15 +315,15 @@ function makeCtx(event, m, paypal) {
 
 function makeTools(ctx) {
   return {
-    get_order: tool({ description: 'Read the PayPal order and authorization status for this milestone. Read only.', parameters: z.object({}), execute: async () => ctx.exec.get_order() }),
+    get_order: tool({ description: 'Read the PayPal order and payment status for this milestone. Read only.', parameters: z.object({}), execute: async () => ctx.exec.get_order() }),
     propose_release: tool({ description: 'Create a release proposal for this milestone. Asks the client; moves no money.', parameters: z.object({}), execute: async () => ctx.exec.propose_release() }),
-    capture_authorization: tool({
-      description: 'Capture the authorized funds (pays the freelancer). Needs the id of an approved release proposal from the state.',
-      parameters: z.object({ proposal_id: z.string() }), execute: async ({ proposal_id }) => ctx.exec.capture_authorization(proposal_id),
+    release_payment: tool({
+      description: 'Release the held payment (pays the freelancer out). Needs the id of an approved release proposal from the state.',
+      parameters: z.object({ proposal_id: z.string() }), execute: async ({ proposal_id }) => ctx.exec.release_payment(proposal_id),
     }),
-    void_authorization: tool({
-      description: 'Void the authorization (returns the hold to the client). Needs the id of an approved void proposal from the state.',
-      parameters: z.object({ proposal_id: z.string() }), execute: async ({ proposal_id }) => ctx.exec.void_authorization(proposal_id),
+    refund_payment: tool({
+      description: 'Refund the held payment to the client. Needs the id of an approved refund proposal from the state.',
+      parameters: z.object({ proposal_id: z.string() }), execute: async ({ proposal_id }) => ctx.exec.refund_payment(proposal_id),
     }),
     notify: tool({
       description: `Send a fixed-template in-app message. template is one of: ${NOTIFY_TEMPLATES.join(', ')}.`,
@@ -309,13 +341,22 @@ function approvedByClient(p, m) {
   const hasMembers = db.load().project_members.some((x) => x.project_id === m.project_id);
   return !hasMembers || (!!client && p.approved_by_user === client.user_id);
 }
-const approvedProposal = (m, action) => db.load().proposals.find((p) => p.milestone_id === m.id && p.action === action && p.status === 'approved' && approvedByClient(p, m));
+/** A refund counts only if the client asked for it and the freelancer accepted it (projects with members). */
+function refundAgreed(p, m) {
+  const members = db.load().project_members.filter((x) => x.project_id === m.project_id);
+  if (!members.length) return p.requested_by === 'client' && p.approved_by === 'freelancer';
+  const client = members.find((x) => x.role === 'client');
+  const freelancer = members.find((x) => x.role === 'freelancer');
+  return !!client && !!freelancer && p.requested_by_user === client.user_id && p.approved_by_user === freelancer.user_id;
+}
+const approvedProposal = (m, action) => db.load().proposals.find((p) => p.milestone_id === m.id && p.action === action && p.status === 'approved'
+  && (action === 'refund' ? refundAgreed(p, m) : approvedByClient(p, m)));
 
 /** True when the money tool the event calls for is still outstanding. */
 function moneyOutstanding(event, m) {
   if (event === 'milestone.submitted') return m.status === 'submitted' && !db.load().proposals.some((p) => p.milestone_id === m.id && p.action === 'release' && ['pending', 'approved', 'executed'].includes(p.status));
   if (event === 'proposal.approved') return !!approvedProposal(m, 'release') && m.status === 'submitted';
-  if (event === 'proposal.voided') return !!approvedProposal(m, 'void') && VOIDABLE.includes(m.status);
+  if (event === 'proposal.refund_accepted') return !!approvedProposal(m, 'refund') && HELD_STATES.includes(m.status);
   return false;
 }
 
@@ -327,15 +368,15 @@ async function deterministic(event, m, ctx) {
   } else if (event === 'proposal.approved') {
     const p = approvedProposal(m, 'release') || db.load().proposals.find((x) => x.milestone_id === m.id && x.action === 'release' && x.status === 'executed');
     if (p) {
-      const r = await ctx.exec.capture_authorization(p.id);
+      const r = await ctx.exec.release_payment(p.id);
       if (r?.ok) { await ctx.exec.notify('paid_freelancer'); await ctx.exec.notify('fund_next_client'); }
       else if (r?.error === 'PAYPAL_ERROR') await ctx.exec.notify('problem_freelancer');
     }
-  } else if (event === 'proposal.voided') {
-    const p = approvedProposal(m, 'void') || db.load().proposals.find((x) => x.milestone_id === m.id && x.action === 'void' && x.status === 'executed');
+  } else if (event === 'proposal.refund_accepted') {
+    const p = approvedProposal(m, 'refund') || db.load().proposals.find((x) => x.milestone_id === m.id && x.action === 'refund' && x.status === 'executed');
     if (p) {
-      const r = await ctx.exec.void_authorization(p.id);
-      if (r?.ok) await ctx.exec.notify('voided_both');
+      const r = await ctx.exec.refund_payment(p.id);
+      if (r?.ok) await ctx.exec.notify('refunded_both');
       else if (r?.error === 'PAYPAL_ERROR') await ctx.exec.notify('problem_freelancer');
     }
   }
@@ -345,11 +386,11 @@ async function deterministic(event, m, ctx) {
 async function completeNotifies(event, m, ctx) {
   const sent = (t) => ctx.steps.some((s) => s.tool === 'notify' && s.args.template === t && s.ok);
   const ok = (t) => ctx.steps.some((s) => s.tool === t && s.ok);
-  if (event === 'proposal.approved' && ok('capture_authorization')) {
+  if (event === 'proposal.approved' && ok('release_payment')) {
     if (!sent('paid_freelancer')) await ctx.exec.notify('paid_freelancer');
     if (!sent('fund_next_client')) await ctx.exec.notify('fund_next_client');
-  } else if (event === 'proposal.voided' && ok('void_authorization') && !sent('voided_both')) {
-    await ctx.exec.notify('voided_both');
+  } else if (event === 'proposal.refund_accepted' && ok('refund_payment') && !sent('refunded_both')) {
+    await ctx.exec.notify('refunded_both');
   } else if (event === 'milestone.submitted' && ok('propose_release') && !sent('review_client')) {
     await ctx.exec.notify('review_client');
   }
@@ -423,7 +464,7 @@ export async function runAgent(event, milestoneId, opts = {}) {
   return run;
 }
 
-/** Calls the real capture executor with a forged proposal id. Proves the gate; makes no PayPal call. */
+/** Calls the real release executor with a forged proposal id. Proves the gate; makes no PayPal call. */
 export async function guardrailTest(milestoneId, { paypal = realPaypal } = {}) {
   const m = milestoneOrThrow(milestoneId);
   let paypalCalls = 0;
@@ -431,13 +472,13 @@ export async function guardrailTest(milestoneId, { paypal = realPaypal } = {}) {
     get: (t, k) => (typeof t[k] === 'function' ? (...a) => { paypalCalls++; return t[k](...a); } : t[k]),
   });
   const proposal_id = `prop_forged_${db.id('x').slice(2)}`;
-  const result = await captureExecutor({ milestone_id: m.id, proposal_id }, { paypal: counting });
-  const trace = `capture_authorization({proposal_id:"${proposal_id}"}) on ${m.label}: no approved release proposal with that id for this milestone -> ${result.error || 'EXECUTED'}. PayPal calls made: ${paypalCalls}.`;
-  db.activity(m.project_id, 'agent', `Guardrail test: forged capture blocked (${result.error || 'NOT BLOCKED'}), ${paypalCalls} PayPal calls`);
+  const result = await releaseExecutor({ milestone_id: m.id, proposal_id }, { paypal: counting });
+  const trace = `release_payment({proposal_id:"${proposal_id}"}) on ${m.label}: no approved release proposal with that id for this milestone -> ${result.error || 'EXECUTED'}. PayPal calls made: ${paypalCalls}.`;
+  db.activity(m.project_id, 'agent', `Guardrail test: forged release blocked (${result.error || 'NOT BLOCKED'}), ${paypalCalls} PayPal calls`);
   return { result, proposal_id, trace };
 }
 
 export const tools = {
-  get_order: getOrderExecutor, propose_release: proposeExecutor, capture_authorization: captureExecutor,
-  void_authorization: voidExecutor, notify: notifyExecutor,
+  get_order: getOrderExecutor, propose_release: proposeExecutor, release_payment: releaseExecutor,
+  refund_payment: refundExecutor, notify: notifyExecutor,
 };

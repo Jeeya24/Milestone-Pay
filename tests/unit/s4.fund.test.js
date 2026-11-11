@@ -57,7 +57,7 @@ test('a second /order returns the same order_id with one PayPal call (even concu
 
 test('/order PayPal failure is 502 PAYPAL_ERROR with the debug id', async () => {
   const { ms } = await setup({
-    createAuthOrder: async () => { const e = new Error('x'); e.paypal_debug_id = 'dbg123'; throw e; },
+    createCaptureOrder: async () => { const e = new Error('x'); e.paypal_debug_id = 'dbg123'; throw e; },
   });
   const r = await app.call('POST', `/api/milestones/${ms[0].id}/order`);
   assert.equal(r.status, 502);
@@ -65,29 +65,32 @@ test('/order PayPal failure is 502 PAYPAL_ERROR with the debug id', async () => 
   assert.equal(r.body.paypal_debug_id, 'dbg123');
 });
 
-test('/authorize: stores payment, ledger AUTHORIZED, activity, notification, status authorized', async () => {
+test('/authorize: charges the client, stores the capture, ledger HELD, no expiry, activity, notification, status authorized', async () => {
   const { pid, ms } = await setup();
   const { body: o } = await app.call('POST', `/api/milestones/${ms[0].id}/order`);
   const r = await app.call('POST', `/api/milestones/${ms[0].id}/authorize`, { order_id: o.order_id });
   assert.equal(r.status, 200);
   assert.equal(r.body.milestone.status, 'authorized');
   assert.deepEqual(r.body.payment, {
-    order_id: o.order_id, authorization_id: `AUTH-${o.order_id}`, status: 'AUTHORIZED', expires_at: '2026-12-01T00:00:00Z', capture_id: null, payout_status: null, payout_batch_id: null,
+    order_id: o.order_id, authorization_id: null, status: 'HELD', expires_at: null, capture_id: `CAP-${o.order_id}`, refund_id: null, payout_status: null, payout_batch_id: null,
   });
   const d = db.load();
   assert.equal(d.ledger.length, 1);
-  assert.equal(d.ledger[0].event, 'AUTHORIZED');
+  assert.equal(d.ledger[0].event, 'HELD');
+  assert.equal(d.ledger[0].paypal_id, `CAP-${o.order_id}`);
+  assert.deepEqual(pp.calls.fund, [o.order_id]);
+  assert.equal(pp.calls.authorize.length, 0);
   assert.equal(d.ledger[0].amount_minor, 240000);
   assert.ok(d.activity.some((a) => a.who === 'pp'));
   const n = d.notifications.find((x) => x.to === 'freelancer');
   assert.match(n.text, /^M1 is funded/);
   const g = await app.call('GET', `/api/projects/${pid}`);
-  assert.equal(g.body.milestones[0].payment.status, 'AUTHORIZED');
+  assert.equal(g.body.milestones[0].payment.status, 'HELD');
   assert.equal(g.body.milestones[0].fundable, false);
   assert.equal((await app.call('GET', '/api/projects')).body.totals.held_minor, 240000);
 });
 
-test('double /authorize returns the same authorization with one PayPal call', async () => {
+test('double /authorize returns the same capture with one PayPal call', async () => {
   const { ms } = await setup();
   const { body: o } = await app.call('POST', `/api/milestones/${ms[0].id}/order`);
   const [a, b] = await Promise.all([
@@ -98,8 +101,9 @@ test('double /authorize returns the same authorization with one PayPal call', as
   assert.equal(a.status, 200);
   assert.equal(b.status, 200);
   assert.equal(c.status, 200);
-  assert.equal(a.body.payment.authorization_id, c.body.payment.authorization_id);
-  assert.equal(pp.calls.authorize.length, 1);
+  assert.ok(a.body.payment.capture_id);
+  assert.equal(a.body.payment.capture_id, c.body.payment.capture_id);
+  assert.equal(pp.calls.fund.length, 1);
   assert.equal(db.load().ledger.length, 1);
 });
 
@@ -111,15 +115,15 @@ test('ORDER_MISMATCH for a foreign or missing order id', async () => {
   assert.equal(r.body.error, 'ORDER_MISMATCH');
   r = await app.call('POST', `/api/milestones/${ms[0].id}/authorize`, {});
   assert.equal(r.body.error, 'ORDER_MISMATCH');
-  assert.equal(pp.calls.authorize.length, 0);
+  assert.equal(pp.calls.fund.length, 0);
 });
 
 test('a PayPal error on /authorize leaves the milestone agreed and the retry reuses the order', async () => {
   let fail = true;
   const { pid, ms } = await setup({
-    authorizeOrder: async (id) => {
+    captureOrder: async (id) => {
       if (fail) { const e = new Error('declined'); e.paypal_debug_id = 'dbg9'; throw e; }
-      return { authorization_id: `AUTH-${id}`, status: 'CREATED', expires_at: null };
+      return { capture_id: `CAP-${id}`, status: 'COMPLETED' };
     },
   });
   const { body: o } = await app.call('POST', `/api/milestones/${ms[0].id}/order`);

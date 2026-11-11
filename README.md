@@ -15,7 +15,8 @@ Everyone logs in with **Log in with PayPal** using a PayPal *sandbox personal* a
 - **Freelancer:** log in, press **+ New project**, paste the chat, review the agreement and press **Approve & send to client**. Then press **Copy link** and send the link to your client in your chat. It is the same link every time, it does not expire, and your client can open it as often as they need.
 - **Client:** open the invite link, log in with PayPal, press **Join as the client**, approve the agreement (no charge) and fund each milestone with the PayPal button.
 - **Privacy:** each project is visible only to its freelancer and the client who joined it. Anyone else gets "Project not found".
-- **Getting paid:** the client's payment is held on the Milestone Pay merchant account. When the client approves, it is captured and then sent to the freelancer's PayPal (the account they log in with) through PayPal Payouts. The REST app needs **Payouts** switched on in the developer dashboard and enough sandbox balance to cover the amount plus PayPal's fee; if a payout fails, the milestone stays paid and **Check with PayPal** on the project page retries it.
+- **Getting paid:** the client is charged when they fund a milestone, and the payment is held on the Milestone Pay merchant account with no time limit. When the client approves, it is sent to the freelancer's PayPal (the account they log in with) through PayPal Payouts. The REST app needs **Payouts** switched on in the developer dashboard and enough sandbox balance to cover the amount plus PayPal's fee; if a payout fails, the milestone stays paid and **Check with PayPal** on the project page retries it.
+- **Refunds:** the client can ask for a refund of a held milestone. The money goes back only when the freelancer accepts; that milestone is then cancelled and later ones do not start. If the freelancer declines, the money stays held.
 - **Leaving:** **Settings > Delete account** logs you out everywhere and deletes your data after 15 days. Log in again before then and the deletion stops. It is refused while money is on hold.
 
 ---
@@ -50,7 +51,7 @@ The demo project is a website for a cafe called **Baan Kafe**: freelancer Ploy, 
 10. **Project page.** Open the project to see milestones, the payment ledger, activity and the **Milestone Agent runs**. Press **Refresh from PayPal** to re-check every payment directly with PayPal.
 11. **Guardrail test.** Press **Test the guardrail**. It tries to make the agent release money without the client's approval. It must be refused.
 
-**Seeing the money moves in PayPal.** Go to [sandbox.paypal.com](https://www.sandbox.paypal.com) and log in as the sandbox **business** account (the seller; see Testing Tools > Sandbox Accounts). Open **Activity** to see authorizations, payments and refunds.
+**Seeing the money moves in PayPal.** Go to [sandbox.paypal.com](https://www.sandbox.paypal.com) and log in as the sandbox **business** account (the seller; see Testing Tools > Sandbox Accounts). Open **Activity** to see payments, payouts and refunds.
 
 ---
 
@@ -75,7 +76,7 @@ npm run test:pg     # Postgres store tests: TEST_DATABASE_URL, else DATABASE_URL
 node scripts/e2e.js # whole journey as freelancer + invited client + a stranger probing for leaks (PayPal stubbed)
 node tests/qa/multi-user-ui.mjs http://localhost:3100 "$PWD"   # headless Chrome click-through (server started with TEST_AUTH=1)
 node evals/run.js   # AI evals (live model calls)
-node scripts/smoke.js          # PayPal sandbox order -> authorize -> capture / void / refund
+node scripts/smoke.js          # PayPal sandbox: fund (capture, held) and fund -> refund
 node scripts/smoke.js --fund   # against a running server: funds the current milestone; prints the approval URL for a human
 ```
 

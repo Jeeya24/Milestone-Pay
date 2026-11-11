@@ -103,23 +103,23 @@ export async function aiStub(overrides = {}) {
 }
 
 export function paypalStub(overrides = {}) {
-  const calls = { order: [], authorize: [], capture: [], void: [], getOrder: [] };
+  // fund = the capture of the funding order (the client is charged); refund = refund of that capture.
+  // authorize / capture / void only happen for payments made before capture-at-funding.
+  const calls = { order: [], fund: [], refund: [], authorize: [], capture: [], void: [], getOrder: [] };
   let n = 0;
   return {
     calls,
     currency: () => 'USD',
-    createAuthOrder: async (m, attempt) => { calls.order.push({ m: { ...m }, attempt }); return { id: `ORDER${++n}`, status: 'CREATED' }; },
-    authorizeOrder: async (orderId) => {
-      calls.authorize.push(orderId);
-      return { authorization_id: `AUTH-${orderId}`, status: 'CREATED', expires_at: '2026-12-01T00:00:00Z' };
-    },
+    createCaptureOrder: async (m, attempt) => { calls.order.push({ m: { ...m }, attempt }); return { id: `ORDER${++n}`, status: 'CREATED' }; },
+    captureOrder: async (orderId) => { calls.fund.push(orderId); return { capture_id: `CAP-${orderId}`, status: 'COMPLETED' }; },
+    refundCapture: async (captureId) => { calls.refund.push(captureId); await new Promise((r) => setTimeout(r, 20)); return { id: `REF-${captureId}`, status: 'COMPLETED' }; },
     captureAuth: async (authId) => { calls.capture.push(authId); await new Promise((r) => setTimeout(r, 20)); return { id: `CAP-${authId}`, status: 'COMPLETED' }; },
     voidAuth: async (authId) => { calls.void.push(authId); return { status: 'VOIDED' }; },
     getOrder: async (orderId) => {
       calls.getOrder.push(orderId);
-      return { id: orderId, status: 'COMPLETED', purchase_units: [{ payments: { authorizations: [{ id: `AUTH-${orderId}`, status: 'CREATED', expiration_time: '2026-12-01T00:00:00Z' }] } }] };
+      return { id: orderId, status: 'COMPLETED', purchase_units: [{ payments: { captures: [{ id: `CAP-${orderId}`, status: 'COMPLETED' }] } }] };
     },
-    total: () => calls.order.length + calls.authorize.length + calls.capture.length + calls.void.length + calls.getOrder.length,
+    total: () => Object.values(calls).reduce((t, a) => t + a.length, 0),
     ...overrides,
   };
 }

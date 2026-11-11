@@ -76,5 +76,5 @@ test('budget guard throws BUDGET_EXCEEDED before the model is called', async () 
 
 test('agent prompt loads and states the gating rules', () => {
   const p = loadPrompt('agent');
-  for (const w of ['milestone.submitted', 'proposal.approved', 'proposal.voided', 'capture_authorization', 'void_authorization']) assert.ok(p.includes(w));
+  for (const w of ['milestone.submitted', 'proposal.approved', 'proposal.refund_accepted', 'release_payment', 'refund_payment']) assert.ok(p.includes(w));
 });
