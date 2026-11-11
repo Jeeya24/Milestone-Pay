@@ -218,7 +218,7 @@ export function viewPayments(d, keep = false) {
   const cards = ms.map((m) => {
     let body = null;
     if (m.fundable) body = fundBlock(m, d);
-    else if (['authorized', 'revision_requested'].includes(m.status)) body = alertBox('held', 'lock', `Milestone Pay is holding this until you approve the work.${m.payment?.expires_at ? ` Held until ${fmtDay(m.payment.expires_at)}.` : ''}`);
+    else if (['authorized', 'revision_requested'].includes(m.status)) body = alertBox('held', 'lock', 'Milestone Pay is holding this until you approve the work.');
     else if (m.status === 'submitted') body = el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, el('span', { class: 'mp-t-sm' }, el('b', {}, `${fname} delivered ${m.label}. `), 'Check the files, then pay or ask for changes.'),
       link(`/p/${pid}/m/${m.id}`, { class: 'mp-btn mp-btn--primary mp-btn--sm' }, `Review ${m.label}`, icon('arrow-right')));
     return msCard(m, { cur, fname, base, current: m.is_current && m.status !== 'voided' && m.status !== 'paid', body, href: ['submitted', 'paid', 'revision_requested', 'authorized'].includes(m.status) ? `/p/${pid}/m/${m.id}` : null });
@@ -287,7 +287,7 @@ export function viewReview(d, mid) {
     try { await api(`/api/proposals/${prop.id}/approve`, { body: {} }); C.busy = false; C.flash = 'paid'; viewPayments(await api(`/api/projects/${pid}`)); }
     catch (e) {
       C.busy = false;
-      const again = await confirmDialog({ icon: 'alert', iconKind: 'issue', title: 'Payment didn’t go through', text: `PayPal couldn’t complete it. No money moved. Your ${money(m.amount_minor, cur)} is still held safely by Milestone Pay${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}.`,
+      const again = await confirmDialog({ icon: 'alert', iconKind: 'issue', title: 'Payment didn’t go through', text: `PayPal couldn’t complete it. No money moved. Your ${money(m.amount_minor, cur)} is still held safely by Milestone Pay.`,
         rows: [[`${fname} received`, money(0, cur)], ['Still held for you', money(m.amount_minor, cur)]], body: el('p', { class: 'mp-t-caption mp-muted' }, e.message), confirm: 'Try again', confirmIcon: 'refresh', cancel: 'Not now' });
       if (again) return pay.click();
       viewReview(await api(`/api/projects/${pid}`).catch(() => d), mid);

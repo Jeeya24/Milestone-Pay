@@ -522,7 +522,7 @@ function drawSubmit(d, m, keep = false) {
     back(`/p/${pid}`, titleOf(d)),
     strip(d, m, `/p/${pid}/m`),
     el('div', { class: 'mp-stack', style: 'gap:6px' }, el('h1', { class: 'mp-t-title' }, `${m.label} · ${m.title}`),
-      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by Milestone Pay${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}`) : null)),
+      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by Milestone Pay`) : null)),
     holdWarning(m, cur, cname, 'freelancer'),
     revising ? el('div', { class: 'mp-stack' }, badge('issue', 'alert', `Changes requested · round ${m.rev_count}${m.rev_limit ? ` of ${m.rev_limit}` : ''}`),
       alertBox('issue', 'flag', el('b', {}, `${cname} asked for changes`), el('div', {}, `“${m.rev_note || ''}”`))) : null,
