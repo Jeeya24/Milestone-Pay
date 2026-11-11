@@ -39,7 +39,9 @@ export function addMember(projectId, userId, role) {
  */
 export function need(kind, role = null, idFrom = (req) => req.params.id) {
   return (req, _res, next) => {
-    const projectId = projectIdFor(kind, idFrom(req));
+    let projectId = projectIdFor(kind, idFrom(req));
+    // A deleted project is in its 15-day restore window: nobody can open or act on it (see routes.js).
+    if (projectId && D().projects.find((x) => x.id === projectId)?.deleted_at) projectId = null;
     let r = projectId && roleOf(req.user.id, projectId);
     if (!r) return next(notFound());
     let actor = req.user.id;

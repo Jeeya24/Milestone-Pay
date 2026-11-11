@@ -1,16 +1,16 @@
-// 09 Project page, for both roles: totals, next step, milestones, timeline, payment history, deliverables.
+// 09 Project page, for both roles: header, totals, next step, milestones (with their files), payment history, timeline.
 import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, alertBox, errBox, toast, money, moneyEl, fmtDay, fmtDateTime, fmtDate,
   badge, msBadge, nextStep, stat, progress, msCard, fileRow, poll, names, planBase, curOf, dueOf, plural, emptyState,
-  titleOf, editableTitle, chatCard, personChip,
+  titleOf, editableTitle, chatCard, personChip, memberOf,
 } from './core.js';
-import { inviteBox, holdWarning } from './freelancer.js';
+import { inviteBox, inviteUrlFor, holdWarning } from './freelancer.js';
 
 const HELD = ['authorized', 'submitted', 'revision_requested'];
 const LEDGER = {
   AUTHORIZED: ['held', 'lock', 'Held by Milestone Pay'], CAPTURED: ['released', 'check', 'Released by the client'], PAID_OUT: ['released', 'banknote', 'Sent to PayPal'], VOIDED: ['refunded', 'undo', 'Cancelled · not charged'], REFUNDED: ['refunded', 'undo', 'Refunded'],
 };
-const P = { refreshed: null, refreshing: false, refreshErr: null, guard: null };
+const P = { refreshed: null, refreshing: false, refreshErr: null, guard: null, pid: null, open: new Map(), timeline: null };
 
 /** The one thing waiting on the viewer, for this project (board 09 note 4). */
 export function nextFor(d, role) {
@@ -39,16 +39,22 @@ export function nextFor(d, role) {
 }
 export const nextCard = (n) => n && nextStep({ ic: n.ic, text: n.text, sub: n.sub, action: n.btn ? link(n.to, { class: 'mp-btn mp-btn--primary' }, n.btn, icon('arrow-right')) : null });
 
-function timeline(d) {
+function timeline(d, role, allPaid) {
   const ms = d.milestones; const base = planBase(d);
   if (!ms.length) return null;
+  // Finished projects keep the timeline behind a toggle; while work is under way it stays open.
+  const shown = allPaid ? P.timeline === true : true;
+  if (allPaid && !shown) {
+    return el('div', {}, el('button', { class: 'mp-btn mp-btn--ghost mp-btn--sm', type: 'button', id: 'timelineToggle', 'aria-expanded': 'false', onclick: () => { P.timeline = true; draw(d, role, true); document.getElementById('timelineToggle')?.focus(); } }, icon('calendar'), 'Show timeline', icon('chevron-down')));
+  }
   let prev = 0;
   const rows = ms.map((m) => { const s = m.start_day ?? prev; const e = Math.max(m.end_day ?? s + 3, s + 1); prev = e; return { m, s, e }; });
   const span = Math.max(1, ...rows.map((r) => r.e));
   const axisDay = (n) => { if (!base) return `Day ${n}`; const x = new Date(base); x.setDate(x.getDate() + n); return fmtDay(x.toISOString()); };
   const ticks = [0, Math.round(span / 4), Math.round(span / 2), Math.round((3 * span) / 4), span];
-  return el('div', { class: 'mp-card mp-card--raised' }, el('div', { class: 'mp-card__head' }, el('h2', { class: 'mp-t-section' }, 'Timeline'),
-    el('span', { class: 'mp-t-caption mp-muted' }, 'Locked milestones start after the one before is paid')),
+  return el('div', { class: 'mp-card mp-card--raised', id: 'timeline' }, el('div', { class: 'mp-card__head' }, el('h2', { class: 'mp-t-section' }, 'Timeline'),
+    allPaid ? el('button', { class: 'mp-btn mp-btn--ghost mp-btn--sm', type: 'button', id: 'timelineToggle', 'aria-expanded': 'true', 'aria-controls': 'timeline', onclick: () => { P.timeline = false; draw(d, role, true); document.getElementById('timelineToggle')?.focus(); } }, 'Hide timeline', icon('chevron-down', 'mp-flip'))
+      : el('span', { class: 'mp-t-caption mp-muted' }, 'Locked milestones start after the one before is paid')),
   el('div', { class: 'mp-tl' }, el('span'), el('div', { class: 'mp-tl__axis' }, ticks.map((t) => el('span', {}, axisDay(t)))),
     rows.map(({ m, s, e }) => {
       const blocked = m.status === 'agreed' && !m.fundable && !m.is_current;
@@ -77,21 +83,32 @@ function ledgerCard(d, role) {
       el('tbody', {}, rows.length ? rows.map((l) => {
         const [k, ic, t] = LEDGER[l.event] || ['none', 'info', l.event];
         return el('tr', {}, el('td', { class: 'mp-num' }, fmtDateTime(l.at)), el('td', {}, l.label || ''),
-          el('td', {}, el('span', { class: `mp-where mp-where--${k}` }, icon(ic), l.event === 'CAPTURED' ? `Released to ${fname}` : l.event === 'PAID_OUT' ? `Sent to ${fname}’s PayPal` : t)),
+          el('td', {}, el('span', { class: `mp-where mp-where--${k}` }, icon(ic), l.event === 'CAPTURED' ? (role === 'freelancer' ? 'Released to you' : `Released to ${fname}`)
+            : l.event === 'PAID_OUT' ? (role === 'freelancer' ? 'Sent to your PayPal' : `Sent to ${fname}’s PayPal`) : t)),
           el('td', { class: 'mp-ref mp-hide-phone', title: l.paypal_id || '' }, l.paypal_id || ''), el('td', { class: 'num mp-num mp-strong' }, money(l.amount_minor, cur)));
       }) : el('tr', {}, el('td', { colspan: '5', class: 'mp-muted', style: 'text-align:center;padding:24px' }, icon('banknote'), ' No payments yet.',
         role === 'client' ? ' You fund the first milestone after approving the agreement.' : ` ${names(d).cname} funds the first milestone after approving the agreement.`))))));
 }
 
-function deliverablesCard(d) {
-  const ms = d.milestones.filter((m) => m.deliverables?.length || ['authorized', 'submitted', 'revision_requested', 'paid'].includes(m.status));
-  if (!ms.length) return null;
-  return el('div', { class: 'mp-stack mp-stack--4' }, el('h2', { class: 'mp-t-section' }, 'Deliverables'),
-    el('div', { class: 'mp-grid-2' }, ms.map((m) => el('div', { class: 'mp-card mp-card--raised mp-stack' },
-      el('div', { class: 'mp-row mp-row--between' }, el('b', { class: 'mp-t-sub' }, `${m.label} · ${m.title}`), msBadge(m, true)),
-      m.deliverables.length ? el('div', {}, m.deliverables.map((f) => fileRow(f)),
-        el('a', { class: 'mp-btn mp-btn--ghost mp-btn--sm', href: `/api/milestones/${m.id}/download-all` }, icon('download'), `Download all (${plural(m.deliverables.length, 'file')}, .zip)`))
-        : el('p', { class: 'mp-t-sm mp-muted' }, m.status === 'revision_requested' ? 'Waiting for revised files' : 'No files submitted yet')))));
+/** A milestone's files, shown when its row is expanded: the same rows and “Download all” link as before. */
+function filesPanel(m) {
+  const files = m.deliverables || [];
+  return files.length ? el('div', {}, files.map((f) => fileRow(f)),
+    el('a', { class: 'mp-btn mp-btn--ghost mp-btn--sm', href: `/api/milestones/${m.id}/download-all` }, icon('download'), `Download all (${plural(files.length, 'file')}, .zip)`))
+    : el('p', { class: 'mp-t-sm mp-muted' }, m.status === 'revision_requested' ? 'Waiting for revised files' : 'No files submitted yet');
+}
+/** Small “copy invite link” button beside the client chip, once the client has joined. Says “Copied” for a moment. */
+function copyInviteButton(pid) {
+  const said = el('span', { class: 'mp-copied', role: 'status', 'aria-live': 'polite' });
+  const btn = el('button', { class: 'mp-iconbtn mp-iconbtn--sm', type: 'button', id: 'copyInviteIcon', title: 'Copy invite link', 'aria-label': 'Copy invite link', onclick: async () => {
+    try {
+      const url = await inviteUrlFor(pid);
+      await navigator.clipboard.writeText(url);
+      btn.replaceChildren(icon('check')); said.textContent = 'Copied';
+    } catch { said.textContent = 'Couldn’t copy'; }
+    setTimeout(() => { btn.replaceChildren(icon('link')); said.textContent = ''; }, 2000);
+  } }, icon('link'));
+  return el('span', { class: 'mp-row', style: 'gap:4px;flex-wrap:nowrap' }, btn, said);
 }
 
 /** Developer-facing demo tooling, folded away (design note: keep raw traces in a debug view only). */
@@ -120,6 +137,7 @@ function underTheHood(d) {
 
 export function projectOverview(d, role) {
   P.refreshed = null; P.refreshErr = null; P.guard = null;
+  P.pid = d.project.id; P.open = new Map(); P.timeline = null; // each visit starts from the default open/closed state
   draw(d, role);
   poll(d.project.id, () => d, (x) => { d = x; draw(x, role, true); }, () => P.refreshing);
 }
@@ -134,16 +152,44 @@ function draw(d, role, keep = false) {
   const voided = ms.find((m) => m.status === 'voided');
   const base = planBase(d);
   const curM = ms.find((m) => m.is_current);
+  const allPaid = ms.length > 0 && ms.every((m) => m.status === 'paid');
+  const completedAt = allPaid ? [...(d.ledger || [])].filter((l) => l.event === 'CAPTURED').map((l) => l.at).sort().pop() : null;
+  const clientJoined = !!memberOf(d, 'client');
+  const redraw = (x) => { d = x; draw(x, role, true); };
+  // The viewer is “you”; only the other person is named.
+  const payee = role === 'freelancer' ? 'you' : fname;
+  // Next step: a prominent card only when it is this person's move; otherwise one slim line.
+  const n = nextFor(d, role);
+  const myMove = !!n?.btn && !['clock', 'x'].includes(n.ic);
+  const next = !n ? null : myMove ? nextCard(n)
+    : el('div', { class: `mp-alert mp-alert--${allPaid ? 'success' : 'info'} mp-slim`, role: 'status', id: 'nextSlim' }, icon(n.ic || 'info'),
+      el('span', { class: 'mp-grow' }, el('b', {}, `${n.text}.`), n.sub ? ` ${n.sub}` : ''), n.btn ? link(n.to, { class: 'mp-link' }, n.btn) : null);
+  const rows = ms.map((m) => {
+    const files = m.deliverables || [];
+    const isOpen = P.open.has(m.id) ? P.open.get(m.id) : (!allPaid && m.is_current && m.status !== 'voided');
+    const panelId = `files-${m.id}`;
+    const toggle = el('button', { class: 'mp-msx__toggle', type: 'button', 'aria-expanded': isOpen ? 'true' : 'false', 'aria-controls': panelId, 'data-files': m.label,
+      onclick: () => { P.open.set(m.id, !isOpen); draw(d, role, true); document.querySelector(`[aria-controls="${panelId}"]`)?.focus(); } },
+    icon('paperclip'), files.length ? plural(files.length, 'file') : 'No files yet', icon('chevron-down', isOpen ? 'mp-flip' : ''));
+    const panel = el('div', { class: 'mp-msx__panel', id: panelId, hidden: !isOpen }, isOpen ? filesPanel(m) : null);
+    return msCard(m, { cur, fname: payee, base, current: m.is_current && m.status !== 'voided', href: `/p/${pid}/m/${m.id}`, body: el('div', { class: 'mp-msx' }, toggle, panel) });
+  });
   const shell = appShell(role,
-    back(role === 'client' ? '/jobs' : '/projects', role === 'client' ? 'Your jobs' : 'Your projects'),
-    el('div', { class: 'mp-row mp-row--between mp-row--top mp-row--wrap', style: 'gap:16px' },
-      el('div', { class: 'mp-stack', style: 'gap:6px;min-width:0' },
-        role === 'freelancer' ? editableTitle(d, (x) => { d = x; draw(x, role, true); }) : el('h1', { class: 'mp-t-title' }, titleOf(d)),
-        el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted', style: 'gap:16px' },
-          d.agreement?.status === 'approved' ? badge('success', 'check', `Agreement v${d.agreement.version} · approved by both`) : null,
-          personChip(d, role === 'client' ? 'freelancer' : 'client'), deadline ? el('span', { class: 'mp-row' }, icon('calendar'), `Due ${deadline}`) : null)),
-      el('div', { class: 'mp-stack', style: 'gap:2px;align-items:flex-end' }, moneyEl(total, cur, 'lg'),
-        extra > 0 ? el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${money(b.total_minor, cur)} agreed + ${money(extra, cur)} change orders`) : null)),
+    back(role === 'client' ? '/jobs' : '/projects', role === 'client' ? 'Hired projects' : 'Your projects'),
+    el('div', { class: 'mp-stack mp-stack--3 mp-pjhead' },
+      el('div', { class: 'mp-row mp-row--between mp-row--top mp-row--wrap', style: 'gap:16px' },
+        el('div', { class: 'mp-stack', style: 'gap:6px;min-width:0' },
+          role === 'freelancer' ? editableTitle(d, redraw) : el('h1', { class: 'mp-t-title' }, titleOf(d)),
+          el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted', style: 'gap:8px 16px' },
+            d.agreement?.status === 'approved' ? badge('success', 'check', `Agreement v${d.agreement.version} · approved by both`) : null,
+            el('span', { class: 'mp-row', style: 'gap:4px;flex-wrap:nowrap' }, personChip(d, role === 'client' ? 'freelancer' : 'client'), role === 'freelancer' && clientJoined ? copyInviteButton(pid) : null),
+            completedAt ? el('span', { class: 'mp-row', id: 'pjDate' }, icon('check'), `Completed ${fmtDate(completedAt)}`) : deadline ? el('span', { class: 'mp-row', id: 'pjDate' }, icon('calendar'), `Due ${deadline}`) : null)),
+        el('div', { class: 'mp-stack', style: 'gap:2px;align-items:flex-end' }, moneyEl(total, cur, 'lg'),
+          extra > 0 ? el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${money(b.total_minor, cur)} agreed + ${money(extra, cur)} change orders`) : null)),
+      el('nav', { class: 'mp-pagelinks', 'aria-label': 'Project pages' },
+        link(`/p/${pid}/agreement`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('file'), 'Agreement'),
+        role === 'freelancer' ? link(`/p/${pid}/changes`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('chat'), 'Change requests') : link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('chat'), 'Your requests'),
+        role === 'freelancer' ? link(`/p/${pid}/activity`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('inbox'), 'Activity') : link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('banknote'), 'Payments'))),
     voided ? (role === 'client' ? alertBox('info', 'info', el('b', {}, `You cancelled ${voided.label}. `), `You weren’t charged for it.${paid ? ` ${fname} keeps the ${money(paid, cur)} already paid.` : ''}`)
       : alertBox('issue', 'x', el('b', {}, `${cname} cancelled ${voided.label}. `), `The ${money(voided.amount_minor, cur)} hold was cancelled and ${cname} wasn’t charged. Later milestones won’t start.${paid ? ` ${money(paid, cur)} stays paid.` : ''}`)) : null,
     el('div', { class: 'mp-statrow' },
@@ -151,16 +197,11 @@ function draw(d, role, keep = false) {
       stat('lock', 'Held by Milestone Pay', held, cur),
       stat('check', role === 'client' ? `Paid to ${fname}` : 'Paid to you', paid, cur)),
     curM ? holdWarning(curM, cur, role === 'client' ? fname : cname, role) : null,
-    nextCard(nextFor(d, role)),
-    role === 'freelancer' ? inviteBox(d) : null,
-    chatCard(d, role, (x) => { d = x; draw(x, role, true); }),
-    el('div', { class: 'mp-stack mp-stack--3' }, el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, el('h2', { class: 'mp-t-section' }, 'Milestones'),
-      el('div', { class: 'mp-row mp-row--wrap' },
-        link(`/p/${pid}/agreement`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('file'), 'Agreement'),
-        role === 'freelancer' ? link(`/p/${pid}/changes`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('chat'), 'Change requests') : link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('plus'), 'Request a change'),
-        role === 'freelancer' ? link(`/p/${pid}/activity`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('inbox'), 'Activity') : link(`/p/${pid}`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, icon('banknote'), 'Payments'))),
-      ms.map((m) => msCard(m, { cur, fname, base, current: m.is_current && m.status !== 'voided', href: `/p/${pid}/m/${m.id}` }))),
-    timeline(d), ledgerCard(d, role), deliverablesCard(d),
+    next,
+    role === 'freelancer' && !clientJoined ? inviteBox(d) : null,
+    el('div', { class: 'mp-stack mp-stack--3', id: 'milestones' }, el('h2', { class: 'mp-t-section' }, 'Milestones'), rows),
+    chatCard(d, role, redraw),
+    ledgerCard(d, role), timeline(d, role, allPaid),
     role === 'freelancer' ? underTheHood(d) : null);
   (keep ? mountKeep : mount)(shell);
 }

@@ -77,7 +77,7 @@ export function viewContinue(mode = 'start', next = '/#/') {
 export function viewLoggedOut() {
   mount(authShell(el('div', { class: 'mp-authcard' },
     el('div', { class: 'mp-authcard__head' }, el('span', { class: 'mp-authcard__icon mp-authcard__icon--success' }, icon('check', 'mp-i--lg')),
-      el('h1', { class: 'mp-t-title' }, 'You’re logged out'), el('p', { class: 'mp-muted mp-t-sm' }, 'Your jobs and payments are safe. Log in again any time to see them.')),
+      el('h1', { class: 'mp-t-title' }, 'You’re logged out'), el('p', { class: 'mp-muted mp-t-sm' }, 'Your projects and payments are safe. Log in again any time to see them.')),
     paypalLoginButton('/#/'), trust())));
 }
 
@@ -92,7 +92,7 @@ export async function viewInviteLanding(token) {
       el('div', { class: 'mp-authcard__head' }, el('span', { class: 'mp-authcard__icon mp-authcard__icon--issue' }, icon(expired ? 'clock' : 'link', 'mp-i--lg')),
         el('h1', { class: 'mp-t-title' }, expired ? (e.code === 'INVITE_USED' ? 'This link was already used' : 'This link has expired') : 'This link doesn’t work'),
         el('p', { class: 'mp-muted mp-t-sm' }, `${e.message} Nothing was approved or charged.`)),
-      el('p', { class: 'mp-switch' }, 'Have an account? ', el('a', { class: 'mp-link', href: loginUrl('/#/') }, 'Continue with PayPal'), ' to see your jobs.'))));
+      el('p', { class: 'mp-switch' }, 'Have an account? ', el('a', { class: 'mp-link', href: loginUrl('/#/') }, 'Continue with PayPal'), ' to see your projects.'))));
   }
   const f = info.freelancer?.name || 'Your freelancer';
   mount(authShell(el('div', { class: 'mp-authcard' },
@@ -223,7 +223,7 @@ export async function viewDone() {
   const next = role === 'freelancer'
     ? { ic: 'plus', text: 'Paste a chat with a client and we’ll turn it into milestones.', btn: 'Create your first job', to: () => go('/new') }
     : invite ? { ic: 'file', text: `${invite.freelancer?.name || 'Your freelancer'}’s agreement is waiting for you.`, sub: [invite.project?.title, invite.total_minor ? money(invite.total_minor, invite.currency) : null, invite.parts ? `${invite.parts} parts` : null].filter(Boolean).join(' · '), btn: 'Review the agreement', to: () => acceptInvite(token) }
-      : { ic: 'briefcase', text: 'When a freelancer sends you an agreement link, open it and the job appears here.', btn: 'Go to Your jobs', to: () => go('/jobs') };
+      : { ic: 'briefcase', text: 'When a freelancer sends you an agreement link, open it and the project appears here.', btn: 'Go to Hired projects', to: () => go('/jobs') };
   const btn = el('button', { class: 'mp-btn mp-btn--primary mp-btn--block', id: 'doneNext', onclick: next.to }, next.btn, icon('arrow-right'));
   mount(authShell(el('div', { class: 'mp-authcard' },
     el('div', { class: 'mp-authcard__head' }, el('span', { class: 'mp-authcard__icon mp-authcard__icon--success' }, icon('check', 'mp-i--lg')),

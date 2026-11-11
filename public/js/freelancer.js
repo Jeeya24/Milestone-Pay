@@ -25,7 +25,7 @@ export async function viewProjects() {
   const newBtn = link('/new', { class: 'mp-btn mp-btn--primary' }, icon('plus'), 'New project');
   if (!all.length) {
     return mount(appShell('freelancer', pageHead('Your projects', null, el('span', { class: 'mp-hide-phone' })),
-      emptyState({ ic: 'chat', title: 'No projects yet', text: 'Paste a LINE or WhatsApp chat where you agreed a job. We’ll turn it into an agreement with milestones.',
+      emptyState({ ic: 'chat', title: 'No projects yet', text: 'Paste the chat where you agreed a job, from any messaging app. We’ll turn it into an agreement with milestones.',
         actions: [link('/new', { class: 'mp-btn mp-btn--primary' }, 'Paste a chat'), demoBtn('mp-btn--secondary')] }),
       sandboxNote()));
   }
@@ -76,7 +76,7 @@ export function projectActions(p, reload) {
   const archive = el('button', { class: 'mp-iconbtn', type: 'button', 'data-action': p.archived ? 'unarchive' : 'archive',
     'aria-label': `${p.archived ? 'Unarchive' : 'Archive'} ${name}`, title: p.archived ? 'Unarchive' : 'Archive', onclick: async () => {
       archive.disabled = true;
-      try { await api(`/api/projects/${p.id}/archive`, { body: { archived: !p.archived } }); toast(p.archived ? 'Moved back to your list' : 'Archived. Find it under Archived at the bottom of the list.', 'archive'); reload(); }
+      try { await api(`/api/projects/${p.id}/archive`, { body: { archived: !p.archived } }); toast(p.archived ? 'Moved back to your list' : 'Archived. Find it under Archived below the list, or in Settings.', 'archive'); reload(); }
       catch (e) { archive.disabled = false; toast(e.message, 'alert'); }
     } }, icon(p.archived ? 'undo' : 'archive'));
   const moneyMoved = p.paid_count > 0 || p.held_minor > 0;
@@ -88,10 +88,10 @@ export function projectActions(p, reload) {
       return;
     }
     const ok = await confirmDialog({ icon: 'trash', iconKind: 'issue', title: `Delete ${name}?`,
-      text: `This removes the chat, the agreement and its milestones for good${p.client ? `, for you and ${p.client}` : ''}. It can’t be undone. No money has moved on this project.`,
+      text: `It disappears from your list${p.client ? ` and from ${p.client}’s` : ''} right away. You can restore it from Settings for 15 days; after that the chat, the agreement and its milestones are erased for good. No money has moved on this project.`,
       confirm: 'Keep project', cancel: 'Delete project', cancelClass: 'mp-btn--danger' });
     if (ok !== false) return; // only the red button deletes
-    try { await api(`/api/projects/${p.id}`, { method: 'DELETE' }); toast('Project deleted', 'trash'); reload(); }
+    try { await api(`/api/projects/${p.id}`, { method: 'DELETE' }); toast('Project deleted. You can restore it from Settings for 15 days.', 'trash'); reload(); }
     catch (e) { toast(e.message, 'alert'); }
   } }, icon('trash'));
   return el('div', { class: 'mp-row', style: 'gap:0' }, archive, del);
@@ -395,6 +395,11 @@ function drawAgreement({ fromProject = false, keep = false, err = null } = {}) {
  * before and after the agreement is approved, and the client can open it as often as they like.
  */
 const inviteUrls = new Map();
+/** The project's lasting client link (fetched once, then remembered). */
+export async function inviteUrlFor(pid) {
+  if (!inviteUrls.has(pid)) inviteUrls.set(pid, (await api(`/api/projects/${pid}/invites`, { body: {} })).url);
+  return inviteUrls.get(pid);
+}
 export function inviteBox(d) {
   const client = memberOf(d, 'client');
   const { cname } = names(d); const pid = d.project.id;
@@ -410,7 +415,7 @@ export function inviteBox(d) {
         : loading('Getting the link…'));
   async function load() {
     paint(null);
-    try { const { url } = await api(`/api/projects/${pid}/invites`, { body: {} }); inviteUrls.set(pid, url); paint(url); }
+    try { paint(await inviteUrlFor(pid)); }
     catch (e) { paint(null, e); }
   }
   if (inviteUrls.has(pid)) paint(inviteUrls.get(pid)); else load();
@@ -558,7 +563,7 @@ export function viewActivity(d) {
 }
 
 // ---------------------------------------------------------------- 08 Change requests (freelancer)
-const Sc = { id: null, title: '', items: [], price: '', busy: false, text: '', chain: Promise.resolve(), quote: null };
+const Sc = { id: null, title: '', items: [], price: '', busy: false, text: '', chain: Promise.resolve(), quote: null, boxOpen: false };
 const VERDICT = {
   new_work: ['pending', 'plus', 'New work'],
   in_scope: ['success', 'check', 'Already in scope'],
@@ -568,6 +573,7 @@ export function viewChanges(d) {
   drawChanges(d);
   poll(d.project.id, () => d, (x) => { d = x; drawChanges(x, true); }, () => Sc.busy);
 }
+const KIND_BADGE = { new_work: ['pending', 'plus', 'New work'], in_scope: ['success', 'check', 'In scope'], revision: ['held', 'refresh', 'Revision'] };
 function drawChanges(d, keep = false) {
   const { cname } = names(d); const cur = curOf(d); const pid = d.project.id;
   const crs = d.change_requests || [];
@@ -575,27 +581,17 @@ function drawChanges(d, keep = false) {
   const past = crs.filter((c) => c !== open).reverse();
   const msgs = d.messages || [];
   const approved = d.agreement?.status === 'approved';
-  const left = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--4' });
+  const redraw = (x) => { d = x; drawChanges(x, true); };
+  // ---- the open request: what was asked (left) and what to do about it (right)
+  let openArea = null;
   if (open) {
-    left.append(el('div', { class: 'mp-row mp-row--between' }, el('b', { class: 'mp-t-sub' }, `From ${open.from === 'client' ? `${cname} · in the app` : 'you'}`), el('span', { class: 'mp-t-caption mp-muted' }, fmtDateTime(open.created_at))),
+    const left = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--4' },
+      el('div', { class: 'mp-row mp-row--between' }, el('b', { class: 'mp-t-sub' }, `From ${open.from === 'client' ? `${cname} · in the app` : 'you'}`), el('span', { class: 'mp-t-caption mp-muted' }, fmtDateTime(open.created_at))),
       el('div', { class: 'mp-msg', style: 'max-width:100%' }, el('span', { class: 'mp-avatar' }, initial(open.from === 'client' ? cname : 'You')),
         el('div', { class: 'mp-bubble' }, el('div', { class: 'mp-bubble__meta' }, el('b', {}, open.from === 'client' ? cname : 'You')), open.text)));
-  } else if (approved) {
-    const ta = el('textarea', { class: 'mp-input', id: 'scopeIn', rows: 4, maxlength: 1000, placeholder: 'Paste the client’s message…', value: Sc.text, oninput: () => { Sc.text = ta.value; btn.disabled = Sc.busy || Sc.text.trim().length < 5; } });
-    const err = el('div');
-    const btn = el('button', { class: 'mp-btn mp-btn--secondary mp-btn--block', disabled: Sc.busy || Sc.text.trim().length < 5, onclick: async () => {
-      Sc.busy = true; btn.disabled = true; btn.replaceChildren(el('span', { class: 'mp-spinner', style: 'width:16px;height:16px' }), 'Checking against the agreement…');
-      try { await api(`/api/projects/${pid}/change-requests`, { body: { message: Sc.text.trim() } }); Sc.text = ''; Sc.id = null; d = await api(`/api/projects/${pid}`); Sc.busy = false; drawChanges(d, true); }
-      catch (e) { Sc.busy = false; btn.disabled = false; btn.textContent = 'Check against agreement'; err.replaceChildren(errBox(e)); }
-    } }, 'Check against agreement');
-    left.append(el('div', { class: 'mp-row mp-row--between' }, el('b', { class: 'mp-t-sub' }, `No open request from ${cname}`)),
-      el('div', { class: 'mp-field' }, el('label', { class: 'mp-label', for: 'scopeIn' }, 'Or paste one from LINE or WhatsApp'), ta), btn, err);
-  } else left.append(emptyState({ ic: 'lock', title: 'Not open yet', text: 'Change requests open once both of you have approved the agreement.' }));
-  let right = null;
-  if (open) {
     const v = VERDICT[open.classification] || ['outline', 'info', 'Unclear'];
     const chips = (open.reason_source_ids || []).map((id) => { const m = msgs.find((x) => x.msg_id === id); return el('span', { class: 'mp-chip', title: m?.text || '' }, icon('chat'), `#${id.replace(/^m/, '')}${m ? ` ${m.sender} ${m.time || ''}` : ''}`); });
-    right = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--4' },
+    const right = el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--4' },
       el('div', { class: 'mp-row mp-row--wrap' }, badge(v[0], v[1], v[2]), el('span', { class: 'mp-t-caption mp-muted' }, 'AI suggestion. You make the final call.')),
       el('p', { class: 'mp-t-sm' }, open.reason || '', ' ', chips));
     if (open.status === 'sent') {
@@ -608,23 +604,53 @@ function drawChanges(d, keep = false) {
       const err = el('div');
       const btn = el('button', { class: 'mp-btn mp-btn--primary', onclick: async () => {
         btn.disabled = true;
-        try { await api(`/api/change-requests/${open.id}/close`, { body: {} }); d = await api(`/api/projects/${pid}`); drawChanges(d, true); toast('Request closed'); }
+        try { await api(`/api/change-requests/${open.id}/close`, { body: {} }); redraw(await api(`/api/projects/${pid}`)); toast('Request closed'); }
         catch (e) { btn.disabled = false; err.replaceChildren(errBox(e)); }
       } }, 'Close request');
       right.append(el('p', { class: 'mp-t-sm mp-muted' }, `Nothing to price. Tell ${cname} on chat, then close this.`), el('div', {}, btn), err);
     }
+    openArea = el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, 'Open request'), el('div', { class: 'mp-changes' }, left, right));
   }
+  // ---- no open request: say so in one line; the box for a request that came in chat sits in the corner
+  const idle = open ? null : approved
+    ? alertBox('info', 'inbox', el('b', {}, `No open request from ${cname}. `), `When ${cname} asks for a change in the app, it shows up here. Did they ask in your chat instead? Use “Check a request from chat” in the corner.`)
+    : emptyState({ ic: 'lock', title: 'Not open yet', text: 'Change requests open once both of you have approved the agreement.' });
   const decided = past.find((c) => c.status === 'accepted' || c.status === 'declined');
+  const how = (n, t) => el('span', { class: 'mp-howstep' }, el('b', {}, n), t);
+  // ---- corner box: paste a request the client sent in chat
+  let corner = null;
+  if (!open && approved) {
+    if (Sc.boxOpen) {
+      const ta = el('textarea', { class: 'mp-input', id: 'scopeIn', rows: 3, maxlength: 1000, placeholder: 'Paste the client’s message…', value: Sc.text, oninput: () => { Sc.text = ta.value; btn.disabled = Sc.busy || Sc.text.trim().length < 5; } });
+      const err = el('div');
+      const btn = el('button', { class: 'mp-btn mp-btn--primary mp-btn--block', id: 'scopeCheck', disabled: Sc.busy || Sc.text.trim().length < 5, onclick: async () => {
+        Sc.busy = true; btn.disabled = true; btn.replaceChildren(el('span', { class: 'mp-spinner', style: 'width:16px;height:16px;border-top-color:var(--on-ink)' }), 'Checking against the agreement…');
+        try { await api(`/api/projects/${pid}/change-requests`, { body: { message: Sc.text.trim() } }); Sc.text = ''; Sc.id = null; Sc.boxOpen = false; const x = await api(`/api/projects/${pid}`); Sc.busy = false; redraw(x); }
+        catch (e) { Sc.busy = false; btn.disabled = false; btn.textContent = 'Check against agreement'; err.replaceChildren(errBox(e)); }
+      } }, 'Check against agreement');
+      corner = el('div', { class: 'mp-corner mp-corner--open', role: 'dialog', 'aria-label': 'Check a request from chat', id: 'scopeBox' },
+        el('div', { class: 'mp-row mp-row--between', style: 'flex-wrap:nowrap' }, el('b', { class: 'mp-t-sm' }, 'Check a request from chat'),
+          el('button', { class: 'mp-iconbtn mp-iconbtn--sm', type: 'button', 'aria-label': 'Close', onclick: () => { Sc.boxOpen = false; drawChanges(d, true); } }, icon('x'))),
+        el('label', { class: 'mp-t-caption mp-muted', for: 'scopeIn', style: 'font-weight:400' }, `Paste what ${cname} asked for. The AI checks it against agreement version 1.`), ta, btn, err);
+      setTimeout(() => { if (document.activeElement?.id !== 'scopeIn') document.getElementById('scopeIn')?.focus(); });
+    } else {
+      corner = el('button', { class: 'mp-corner mp-btn mp-btn--primary', type: 'button', id: 'scopeOpen', 'aria-haspopup': 'dialog', onclick: () => { Sc.boxOpen = true; drawChanges(d, true); } }, icon('chat'), 'Check a request from chat');
+    }
+  }
   (keep ? mountKeep : mount)(appShell('freelancer', back(`/p/${pid}`, titleOf(d)),
-    pageHead('Change requests', `${cname} can request changes from their phone, or you can paste one they sent on chat. The AI checks it against agreement version 1.`),
+    pageHead('Change requests', `Extra work or changes ${cname} asks for after the agreement was approved.`),
+    el('div', { class: 'mp-how', 'aria-label': 'How change requests work' }, how('1', `${cname} asks in the app, or you paste what they asked in chat`), how('2', 'The AI checks it against agreement version 1'), how('3', `If it’s new work you send a price, and ${cname} accepts or declines`)),
     decided && decided === past[0] ? (decided.status === 'declined'
       ? alertBox('issue', 'x', el('b', {}, `${cname} declined the change order. `), `${decided.sent_version?.label || ''} · ${decided.sent_version?.title || ''} · ${money(decided.sent_version?.amount_minor || 0, cur)}. Scope stays as agreed in version 1.`)
       : alertBox('success', 'check', el('b', {}, `${cname} accepted the change order. `), `${decided.sent_version?.label || ''} · ${decided.sent_version?.title || ''} (${money(decided.sent_version?.amount_minor || 0, cur)}) is now a new milestone, funded after the ones before it.`)) : null,
-    el('div', { class: right ? 'mp-changes' : '' }, left, right),
-    past.length ? el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, 'Earlier requests'),
-      el('div', { class: 'mp-card mp-card--raised mp-card--flush' }, el('table', { class: 'mp-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Request'), el('th', {}, 'From'), el('th', {}, 'When'), el('th', {}, 'Result'))),
-        el('tbody', {}, past.map((c) => el('tr', {}, el('td', {}, c.sent_version?.title || (c.text.length > 70 ? `${c.text.slice(0, 70)}…` : c.text)), el('td', {}, c.from === 'client' ? cname : 'You'), el('td', {}, fmtDate(c.created_at)),
-          el('td', {}, c.status === 'accepted' ? badge('success', 'check', 'Accepted') : c.status === 'declined' ? badge('neutral', 'x', 'Declined') : badge('neutral', 'check', 'Closed')))))))) : null));
+    openArea, idle,
+    approved ? el('div', { class: 'mp-stack mp-stack--3', id: 'earlierRequests' }, el('h2', { class: 'mp-t-section' }, `Earlier requests${past.length ? ` · ${past.length}` : ''}`),
+      past.length ? el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Request'), el('th', {}, 'From'), el('th', {}, 'When'), el('th', {}, 'AI check'), el('th', {}, 'Result'))),
+        el('tbody', {}, past.map((c) => { const k = KIND_BADGE[c.classification]; return el('tr', {}, el('td', { title: c.text }, c.sent_version?.title || (c.text.length > 70 ? `${c.text.slice(0, 70)}…` : c.text)), el('td', {}, c.from === 'client' ? cname : 'You'), el('td', {}, fmtDate(c.created_at)),
+          el('td', {}, k ? badge(k[0], k[1], k[2]) : ''),
+          el('td', {}, c.status === 'accepted' ? badge('success', 'check', 'Accepted') : c.status === 'declined' ? badge('neutral', 'x', 'Declined') : badge('neutral', 'check', 'Closed'))); }))))
+        : el('p', { class: 'mp-muted mp-t-sm' }, 'Requests you’ve dealt with, and how each one ended, will be listed here.')) : null,
+    corner));
 }
 function draftEditor(c, d, cur, cname) {
   if (Sc.id !== c.id) { const dr = c.draft || {}; Sc.id = c.id; Sc.title = dr.title || ''; Sc.items = [...(dr.deliverables || [])]; Sc.price = major(dr.amount_minor || 0); }
@@ -651,7 +677,7 @@ function draftEditor(c, d, cur, cname) {
   drawItems();
   send.addEventListener('click', async () => {
     Sc.busy = true; send.disabled = true; await Sc.chain;
-    try { await api(`/api/change-requests/${c.id}/send`, { body: {} }); Sc.busy = false; toast(`Change order sent to ${cname}`); drawChanges(await api(`/api/projects/${d.project.id}`), true); }
+    try { await api(`/api/change-requests/${c.id}/send`, { body: {} }); Sc.busy = false; toast(`Change order sent to ${cname}`); viewChanges(await api(`/api/projects/${d.project.id}`)); }
     catch (e) { Sc.busy = false; paint(); err.replaceChildren(errBox(e)); }
   });
   paint();

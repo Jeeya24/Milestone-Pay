@@ -217,12 +217,14 @@ export function invoiceLinks(m) {
       el('a', { class: 'mp-btn mp-btn--secondary mp-btn--sm', href: `${m.invoice.url}?download=1`, download: `${m.invoice.number}.html`, 'aria-label': `Download the ${m.label} invoice` }, icon('download'), 'Download')));
 }
 export const viewUrl = (u) => u + (u.includes('?') ? '&' : '?') + 'inline=1';
+/** File types a browser can show in a tab. Others (e.g. .zip) only get the download button. */
+const PREVIEWABLE = /\.(pdf|png|jpe?g|mp4)$/i;
 export function fileRow(f, { onRemove } = {}) {
   const name = f.filename || f.name;
   const ext = (name.split('.').pop() || '').slice(0, 4).toUpperCase();
   return el('div', { class: 'mp-file' }, el('span', { class: 'mp-file__thumb' }, ext), el('span', { class: 'mp-file__name', title: name }, name),
     el('span', { class: 'mp-file__size' }, fmtSize(f.size || 0)),
-    f.download_url ? el('a', { class: 'mp-iconbtn', href: viewUrl(f.download_url), target: '_blank', rel: 'noopener', 'aria-label': `View ${name}` }, icon('eye')) : null,
+    f.download_url && PREVIEWABLE.test(name) ? el('a', { class: 'mp-iconbtn', href: viewUrl(f.download_url), target: '_blank', rel: 'noopener', 'aria-label': `View ${name}` }, icon('eye')) : null,
     f.download_url ? el('a', { class: 'mp-iconbtn', href: f.download_url, 'aria-label': `Download ${name}` }, icon('download')) : null,
     onRemove ? el('button', { class: 'mp-iconbtn', type: 'button', onclick: onRemove, 'aria-label': `Remove ${name}` }, icon('x')) : null);
 }
@@ -292,7 +294,7 @@ export function topbar(role = homeRole()) {
   const isClient = role === 'client';
   const nav = el('nav', { class: 'mp-nav' },
     roles.has('freelancer') || !roles.size || !isClient ? link('/projects', { class: !isClient ? 'on' : '' }, 'Projects') : null,
-    roles.has('client') || isClient ? link('/jobs', { class: isClient ? 'on' : '' }, 'Your jobs') : null);
+    roles.has('client') || isClient ? link('/jobs', { class: isClient ? 'on' : '' }, 'Hired projects') : null);
   const pic = S.me?.avatar_url;
   const btn = el('button', { class: `mp-avatarbtn ${isClient ? 'mp-avatarbtn--client' : ''}`, 'aria-label': 'Account menu', 'aria-haspopup': 'menu', 'aria-expanded': 'false', id: 'avatarBtn' },
     pic ? el('span', { class: 'mp-avatarbtn__img' }, el('img', { src: pic, alt: '' })) : el('span', {}, initial(myName())));
@@ -306,10 +308,10 @@ export function topbar(role = homeRole()) {
     const other = isClient ? 'freelancer' : 'client';
     menu = el('div', { class: 'mp-menu', role: 'menu' },
       el('div', { class: 'mp-menu__who' }, avatar(myName(), pic, `mp-avatar--lg ${isClient ? '' : 'mp-avatar--me'}`),
-        el('div', {}, el('b', { class: 'mp-t-sm', id: 'userName' }, myName()), el('div', { class: 'mp-t-caption mp-muted' }, S.me?.email || ''))),
+        el('div', { class: 'mp-menu__id' }, el('b', { class: 'mp-t-sm', id: 'userName' }, myName()), el('div', { class: 'mp-t-caption mp-muted', title: S.me?.email || '' }, S.me?.email || ''))),
       item(isClient ? 'building' : 'user', isClient ? 'Business details' : 'Profile', () => go('/settings')),
       item('banknote', 'PayPal', () => go('/settings#paypal'), el('small', { class: 'mp-ok' }, icon('check'), 'Connected')),
-      roles.has(other) ? item(other === 'client' ? 'briefcase' : 'laptop', other === 'client' ? 'Switch to Your jobs' : 'Switch to Projects', () => switchRole(other))
+      roles.has(other) ? item(other === 'client' ? 'briefcase' : 'laptop', other === 'client' ? 'Switch to Hired projects' : 'Switch to Projects', () => switchRole(other))
         : item(other === 'client' ? 'briefcase' : 'laptop', other === 'client' ? 'Add client role' : 'Add freelancer role', () => switchRole(other, true), el('small', {}, other === 'client' ? 'for hiring' : 'to get paid')),
       item('menu', 'Settings', () => go('/settings')),
       el('span', { class: 'mp-menu__sep' }),
@@ -322,7 +324,7 @@ export function topbar(role = homeRole()) {
 }
 export async function switchRole(role, add = false) {
   try { S.me = (await api('/api/me', { method: 'PATCH', body: add ? { add_role: role } : { role } })).user; } catch (e) { return toast(e.message, 'alert'); }
-  if (add) toast(role === 'client' ? 'Client role added. You can hire people from Your jobs.' : 'Freelancer role added. Paste a chat to start a job.');
+  if (add) toast(role === 'client' ? 'Client role added. Projects you hire for show under Hired projects.' : 'Freelancer role added. Paste a chat to start a job.');
   go(role === 'client' ? '/jobs' : '/projects');
 }
 export async function logout() {

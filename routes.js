@@ -147,7 +147,7 @@ const bodyMilestone = (req) => String(req.body?.milestone_id ?? '');
 const bySeq = (a, b) => a.seq - b.seq;
 
 function getProject(id) {
-  const p = D().projects.find((x) => x.id === id && x.source !== 'lab');
+  const p = D().projects.find((x) => x.id === id && x.source !== 'lab' && !x.deleted_at);
   if (!p) throw E('NOT_FOUND', 'Project not found', 404);
   return p;
 }
@@ -236,7 +236,7 @@ const memberName = (projectId, role) => displayName(D().users.find((u) => u.id =
 export function invitePreview(token) {
   const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
   const i = typeof token === 'string' && token ? D().invites.find((x) => x.token_hash === sha(token)) : null;
-  const p = i && D().projects.find((x) => x.id === i.project_id);
+  const p = i && D().projects.find((x) => x.id === i.project_id && !x.deleted_at);
   if (!p) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
   if (i.revoked) throw E('INVITE_USED', 'This invite link was replaced. Ask the freelancer for the current one.', 409);
   if (i.expires_at && Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
@@ -301,6 +301,13 @@ export function purgeUser(uid) {
   Object.assign(u, { deleted_at: now(), email: null, name: null, paypal_user_id: null });
   db.save();
   return own.size;
+}
+
+/** Erase every deleted project whose 15-day restore window is over. Returns how many were erased. */
+export function purgeDueProjects(at = Date.now()) {
+  const due = new Set(D().projects.filter((p) => p.deleted_at && p.delete_after && Date.parse(p.delete_after) <= at).map((p) => p.id));
+  removeProjects(due);
+  return due.size;
 }
 
 /**
@@ -414,7 +421,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     const myRows = d.project_members.filter((m) => m.user_id === req.user.id);
     const myRole = new Map(myRows.map((m) => [m.project_id, m.role]));
     const archived = new Set(myRows.filter((m) => m.archived_at).map((m) => m.project_id));
-    const projects = d.projects.filter((p) => p.source !== 'lab' && myRole.has(p.id));
+    const projects = d.projects.filter((p) => p.source !== 'lab' && !p.deleted_at && myRole.has(p.id));
     const ids = new Set(projects.filter((p) => myRole.get(p.id) === 'freelancer').map((p) => p.id)); // totals: my freelance work
     const latest = new Map(); // milestone_id -> latest ledger event
     let paid = 0;
@@ -667,7 +674,26 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     res.json({ id: req.projectId, archived: !!row.archived_at });
   });
 
-  // Deleting erases the project for both people, so it is refused once money is on hold or has been paid.
+  // Deleted projects the freelancer can still restore (15 days). Registered before the /projects/:id routes.
+  const deletedView = (p) => ({ id: p.id, title: p.title ?? null, client: memberName(p.id, 'client') ?? p.client ?? null, deleted_at: p.deleted_at, restore_until: p.delete_after });
+  const myDeleted = (uid) => {
+    const mine = new Set(D().project_members.filter((m) => m.user_id === uid && m.role === 'freelancer').map((m) => m.project_id));
+    return D().projects.filter((p) => p.deleted_at && mine.has(p.id) && Date.parse(p.delete_after) > Date.now());
+  };
+  r.get('/projects/deleted', (req, res) => {
+    res.json({ projects: myDeleted(req.user.id).map(deletedView).reverse(), days: DELETE_AFTER_DAYS });
+  });
+  r.post('/projects/:id/restore', (req, res) => {
+    const p = myDeleted(req.user.id).find((x) => x.id === req.params.id);
+    if (!p) throw E('NOT_FOUND', 'Project not found', 404);
+    delete p.deleted_at; delete p.delete_after; delete p.deleted_by;
+    db.save();
+    db.activity(p.id, 'free', 'Project restored');
+    res.json({ project: projectView(p) });
+  });
+
+  // Deleting hides the project from both people at once and erases it after 15 days (purgeDueProjects); until then
+  // the freelancer can restore it. Refused once money is on hold or has been paid.
   r.delete('/projects/:id', need('project', 'freelancer'), (req, res) => {
     const p = getProject(req.params.id);
     const ms = milestonesOf(p.id);
@@ -677,8 +703,9 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
     if (ms.some((m) => m.status === 'paid' || m.status === 'refunded')) {
       throw E('HAS_PAYMENTS', 'This project has payments, so its record is kept. Archive it instead.', 409);
     }
-    removeProjects(new Set([p.id]));
-    res.json({ ok: true });
+    Object.assign(p, { deleted_at: now(), delete_after: new Date(Date.now() + DELETE_AFTER_DAYS * 864e5).toISOString(), deleted_by: req.user.id });
+    db.save();
+    res.json({ ok: true, restore_until: p.delete_after, days: DELETE_AFTER_DAYS });
   });
 
   // ---- Step 4: approve agreement ------------------------------------------
@@ -1244,7 +1271,7 @@ export function createRoutes({ paypal, ai, agent, agentOpts = {}, fixturesDir = 
   /** The invite for a raw token, or 404. A replaced link is INVITE_USED; an old dated link can be INVITE_EXPIRED. */
   function usableInvite(token) {
     const i = typeof token === 'string' ? D().invites.find((x) => x.token_hash === sha256(token)) : null;
-    if (!i || !D().projects.some((p) => p.id === i.project_id)) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
+    if (!i || !D().projects.some((p) => p.id === i.project_id && !p.deleted_at)) throw E('NOT_FOUND', 'This invite link is not valid.', 404);
     if (i.revoked) throw E('INVITE_USED', 'This invite link was replaced. Ask the freelancer for the current one.', 409);
     if (i.expires_at && Date.parse(i.expires_at) <= Date.now()) throw E('INVITE_EXPIRED', 'This invite link has expired. Ask the freelancer for a new one.', 410);
     return i;

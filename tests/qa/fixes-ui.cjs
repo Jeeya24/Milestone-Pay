@@ -20,7 +20,7 @@ const PNG1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAFUlEQV
 const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
 (async () => {
   const b = await chromium.launch();
-  const F = await (await b.newContext({ viewport: { width: 1280, height: 860 } })).newPage(); watch(F, 'F');
+  const F = await (await b.newContext({ viewport: { width: 1280, height: 860 }, permissions: ['clipboard-read', 'clipboard-write'] })).newPage(); watch(F, 'F');
   await F.goto(base + '/#/login'); await login(F, 'Ploy');
   await F.waitForSelector('[data-role="freelancer"]'); await F.click('[data-role="freelancer"]'); await F.click('#roleContinue');
   await F.waitForSelector('#displayName'); await F.fill('#displayName', 'Ploy Design'); await F.getByRole('button', { name: 'Web design' }).click();
@@ -104,8 +104,10 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   await shot(C, 'client-payments-desktop');
 
   // 10: the same link again after the client joined, and it still opens for the client.
-  await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('#inviteUrl');
-  ok('10 same link on the project page after approval', (await F.inputValue('#inviteUrl')) === invite);
+  await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('#copyInviteIcon');
+  ok('24.2 no invite card or raw URL once the client joined', !(await F.$('#inviteBox')) && !(await F.$('#inviteUrl')));
+  await F.click('#copyInviteIcon'); await F.waitForSelector('.mp-copied:has-text("Copied")');
+  ok('10 same link copied from the project page after approval', (await F.evaluate(() => navigator.clipboard.readText())) === invite);
   await C.goto(invite); await C.waitForSelector('.mp-paypage'); await C.goto(invite); await C.waitForSelector('.mp-paypage');
   ok('10 the client opened the link twice more', C.url().includes(`/p/${pid}`));
 
@@ -125,6 +127,20 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   // 11: both sides write in the chat on the project page
   await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('#chat');
   ok('11 freelancer sees the chat on the project page', (await F.locator('#projectChat').innerText()).includes('Asked for changes on M1'));
+  // 24, in progress: header links, action card, files inside the rows, timeline open
+  const st = () => F.evaluate(() => ({ links: [...document.querySelectorAll('.mp-pjhead .mp-pagelinks a')].map((a) => a.innerText.trim()), h2: [...document.querySelectorAll('#main h2')].map((h) => h.innerText.trim()),
+    open: [...document.querySelectorAll('.mp-msx__toggle')].map((t) => t.getAttribute('aria-expanded')), labels: [...document.querySelectorAll('.mp-msx__toggle')].map((t) => t.innerText.trim()),
+    next: !!document.querySelector('.mp-next'), slim: document.querySelector('#nextSlim')?.className || null, tl: !!document.querySelector('#timeline'), tlBtn: document.querySelector('#timelineToggle')?.innerText.trim() || null, date: document.querySelector('#pjDate')?.innerText.trim() }));
+  let s1 = await st();
+  ok('24.1 page links are in the header', JSON.stringify(s1.links) === JSON.stringify(['Agreement', 'Change requests', 'Activity']));
+  ok('24.4 no separate Deliverables section', !s1.h2.includes('Deliverables'));
+  ok('24.8 section order', JSON.stringify(s1.h2.filter((h) => ['Milestones', 'Payment history', 'Timeline'].includes(h))) === JSON.stringify(['Milestones', 'Payment history', 'Timeline']));
+  ok('24.4 only the active milestone is expanded', JSON.stringify(s1.open) === JSON.stringify(['true', 'false', 'false', 'false']));
+  ok('24.3 action needed: the prominent next-step card', s1.next && !s1.slim);
+  ok('24.6 timeline open while in progress, no toggle', s1.tl && !s1.tlBtn && /^Due /.test(s1.date));
+  await F.focus('[data-files="M2"]'); await F.keyboard.press('Enter'); await F.waitForSelector('[data-files="M2"][aria-expanded="true"]');
+  ok('24.4 a row expands from the keyboard', (await F.locator('#' + (await F.getAttribute('[data-files="M2"]', 'aria-controls'))).innerText()).includes('No files submitted yet'));
+  await F.keyboard.press('Enter'); await F.waitForSelector('[data-files="M2"][aria-expanded="false"]');
   await F.fill('#chatInput', 'Sure. All of them, or just the drinks?'); await F.click('#chatSend');
   await F.waitForSelector('#projectChat >> text=Sure. All of them, or just the drinks?');
   await C.waitForSelector('#projectChat >> text=Sure. All of them, or just the drinks?', { timeout: 8000 }); ok('11 client gets the reply without reloading', true);
@@ -160,7 +176,17 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   await C.waitForSelector('text=paid to Ploy Design for M1', { timeout: 8000 });
   await F.goto(`${base}/#/p/${pid}`); await F.waitForSelector('text=Payment history');
   const hist = await txt(F);
-  ok('14 history shows the payout to the freelancer’s PayPal', hist.includes('Sent to Ploy Design’s PayPal') && hist.includes('STUBPAYOUT-'));
+  ok('14 history shows the payout to the freelancer’s PayPal', hist.includes('Sent to your PayPal') && hist.includes('STUBPAYOUT-'));
+  ok('24.7 the freelancer is “you”, never their own name', hist.includes('Paid to you') && hist.includes('Released to you') && !hist.includes('Paid to Ploy Design') && !hist.includes('Ploy Design’s PayPal'));
+  s1 = await st();
+  ok('24.3 nothing to do (waiting for the client): one slim line', !s1.next && /mp-slim/.test(s1.slim || ''));
+  ok('24.4 a paid row shows its file count and Download all when opened', s1.labels[0] === '1 file');
+  await F.click('[data-files="M1"]'); await F.waitForSelector('.mp-msx__panel a[href$="/download-all"]');
+  await C.goto(`${base}/#/p/${pid}/project`); await C.waitForSelector('#milestones');
+  const ch = await txt(C);
+  ok('24.7 client view names the freelancer and never calls the client by name', ch.includes('Paid to Ploy Design') && ch.includes('Sent to Ploy Design’s PayPal') && !ch.includes('Paid to you'));
+  ok('24.1 client header links', JSON.stringify(await C.evaluate(() => [...document.querySelectorAll('.mp-pjhead .mp-pagelinks a')].map((a) => a.innerText.trim()))) === JSON.stringify(['Agreement', 'Your requests', 'Payments']));
+  await shot(C, 'client-project-in-progress');
   ok('12 history says held by Milestone Pay', hist.includes('Held by Milestone Pay') && !/held by paypal/i.test(hist));
   await shot(F, 'project-page-paid');
   await F.goto(`${base}/#/p/${pid}/m/${m1}`); await F.waitForSelector('text=sent to your PayPal'); ok('14 milestone page says it was sent to your PayPal', true);
@@ -195,8 +221,19 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   ok('01 a paid project can’t be deleted, only archived', (await F.locator('.mp-dialog').innerText()).includes('can’t be deleted'));
   await F.getByRole('button', { name: 'Go back' }).click();
   await F.click(`[data-project="${pid2}"] [data-action="delete"]`); await F.waitForSelector('.mp-dialog'); await shot(F, 'delete-confirm', false);
+  ok('23 the dialog says it can be restored for 15 days', (await F.locator('.mp-dialog').innerText()).includes('restore it from Settings for 15 days'));
   await F.getByRole('button', { name: 'Delete project' }).click(); await F.waitForFunction((id) => !document.querySelector(`[data-project="${id}"]`), pid2);
   ok('01 deleted project is gone', (await F.locator('.mp-jobrow').count()) === 1);
+  // 23: archived and deleted projects in Settings
+  await F.click(`[data-project="${pid}"] [data-action="archive"]`); await F.waitForSelector('#archived');
+  await F.goto(`${base}/#/settings`); await F.waitForSelector('#set-deleted [data-action="restore"]'); await shot(F, 'settings-archived-deleted');
+  ok('23 Settings lists the archived project with Open and Unarchive', (await F.locator('#set-archived').innerText()).includes('Baan Kafe site 2026') && !!(await F.$(`#set-archived a[href="#/p/${pid}"]`)));
+  ok('23 Settings lists the deleted project with its erase date', /Deleted · 1[\s\S]*erased for good on/.test(await F.locator('#set-deleted').innerText()));
+  await F.click('#set-deleted [data-action="restore"]'); await F.waitForSelector('text=Deleted · 0');
+  await F.click('#set-archived [data-action="unarchive"]'); await F.waitForSelector('text=Archived · 0');
+  await F.goto(`${base}/#/projects`); await F.waitForSelector(`[data-project="${pid2}"]`);
+  ok('23 restored and unarchived projects are back in the list', (await F.locator('.mp-jobrow').count()) === 2 && !(await F.$('#archived')));
+  await F.goto(`${base}/#/p/${pid2}`); await F.waitForSelector('.mp-terms'); ok('23 the restored project opens with its agreement', true);
   await C.goto(`${base}/#/jobs`); await C.waitForSelector('.mp-jobrow'); ok('01 the client can archive but not delete', (await C.locator('[data-action="archive"]').count()) >= 1 && !(await C.locator('[data-action="delete"]').count()));
   await shot(C, 'client-jobs');
 
@@ -215,13 +252,75 @@ const overflows = (p) => p.evaluate(() => document.documentElement.scrollWidth >
   await S.waitForSelector('text=Your account won’t be deleted', { timeout: 8000 }); ok('03 logging in again stops the deletion', true);
   await S.waitForSelector('h1:has-text("Your projects")'); ok('03 the account still works', true);
 
+  // 20, 21, 22: naming, wording, account menu
+  await C.goto(`${base}/#/jobs`); await C.waitForSelector('h1:has-text("Hired projects")');
+  ok('20 the client list is “Hired projects”, not “Your jobs”', !(await txt(C)).includes('Your jobs') && (await C.locator('.mp-nav').innerText()).includes('Hired projects'));
+  let apps = '';
+  for (const h of ['/projects', '/new', `/p/${pid}/changes`, `/p/${pid}`, '/settings']) { await F.goto(base + '/#' + h); await F.waitForTimeout(500); apps += await txt(F); }
+  const W = await (await b.newContext()).newPage(); await W.goto(base + '/welcome.html'); apps += await W.evaluate(() => document.documentElement.innerHTML.replace(/<style[\s\S]*?<\/style>/g, '')); await W.close();
+  ok('21 no “LINE” or “WhatsApp” wording left', !/WhatsApp|\bLINE\b/.test(apps));
+  await F.click('#avatarBtn'); await F.waitForSelector('.mp-menu');
+  const fits = await F.evaluate(() => { const e = document.querySelector('.mp-menu__id div'); e.textContent = 'sb-pydu053787849-a-very-long-address@business.example.com'; const m = document.querySelector('.mp-menu').getBoundingClientRect(); const r = e.getBoundingClientRect(); return r.right <= m.right && r.left >= m.left; });
+  ok('22 a long email stays inside the account menu', fits); await shot(F, 'account-menu', false); await F.keyboard.press('Escape'); await F.click('#avatarBtn');
+
+  // 18, 19: change requests. The client sends one, the freelancer prices it, the client declines; both keep the history.
+  await C.goto(`${base}/#/p/${pid}/change`); await C.waitForSelector('#crText'); await C.fill('#crText', 'Can you add an online ordering page?'); await btn(C, /Send to/).click();
+  await C.waitForSelector('text=Request sent to');
+  await C.goto(`${base}/#/p/${pid}/change`); await C.waitForSelector('#openRequest'); ok('18 the client can reopen their open request', (await C.locator('#openRequest').innerText()).includes('online ordering page'));
+  await F.goto(`${base}/#/p/${pid}/changes`); await F.waitForSelector('#sendQuote'); ok('19 no corner box while a request is open', !(await F.$('.mp-corner')));
+  await F.click('#sendQuote'); await F.waitForSelector('text=Waiting for Baan Kafe to accept');
+  await C.goto(`${base}/#/p/${pid}`); await C.waitForSelector('text=Not in agreement'); await C.getByRole('button', { name: 'Decline' }).click(); await C.waitForSelector('text=Declined.');
+  await C.click('#pastRequests'); await C.waitForSelector('#requestHistory .mp-reqitem');
+  const hist2 = await C.locator('#requestHistory').innerText();
+  ok('18 the client sees past requests and what happened', hist2.includes('Can you add an online ordering page?') && hist2.includes('Declined') && hist2.includes('You declined'));
+  ok('18 and can send a new one from the same page', !!(await C.$('#crText'))); await shot(C, 'client-requests');
+  await F.waitForSelector('#scopeOpen', { timeout: 8000 });
+  const lay2 = await F.evaluate(() => { const t = document.querySelector('#earlierRequests'); const c = document.querySelector('#scopeOpen'); const r = c.getBoundingClientRect();
+    return { before: !!(t.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING), corner: getComputedStyle(c).position === 'fixed' && innerWidth - r.right <= 32 && innerHeight - r.bottom <= 32, rows: t.querySelectorAll('tbody tr').length }; });
+  ok('19 earlier requests table comes before the paste box', lay2.before && lay2.rows === 1);
+  ok('19 the paste box is a small button in the corner', lay2.corner); await shot(F, 'changes-idle', false);
+  await F.click('#scopeOpen'); await F.waitForSelector('#scopeBox #scopeIn');
+  const box = await F.evaluate(() => { const r = document.querySelector('#scopeBox').getBoundingClientRect(); return r.width <= 380 && innerWidth - r.right <= 32 && innerHeight - r.bottom <= 32; });
+  ok('19 it opens as a small panel in the corner', box); await F.fill('#scopeIn', 'Client asked for a loyalty card page'); await shot(F, 'changes-corner-open', false);
+  await F.click('#scopeCheck'); await F.waitForSelector('#sendQuote'); ok('19 pasting a request from chat still works', true);
+  await F.getByRole('button', { name: 'Close request' }).or(F.locator('#sendQuote')).first().waitFor();
+
+  // 24, fully paid: pay the remaining milestones through the API, one with a .zip
+  const ZIP = [0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0];
+  const left = await C.evaluate(async (pid) => (await (await fetch('/api/projects/' + pid)).json()).milestones.filter((m) => m.status !== 'paid').map((m) => m.id), pid);
+  for (const [i, mid] of left.entries()) {
+    await C.evaluate(async (mid) => { const h = { 'content-type': 'application/json' }; const o = await (await fetch(`/api/milestones/${mid}/order`, { method: 'POST', headers: h, body: '{}' })).json();
+      await fetch(`/api/milestones/${mid}/authorize`, { method: 'POST', headers: h, body: JSON.stringify({ order_id: o.order_id }) }); }, mid);
+    const prop = await F.evaluate(async ([mid, bytes, name]) => { const fd = new FormData(); fd.append('files[]', new Blob([new Uint8Array(bytes)]), name); await fetch(`/api/milestones/${mid}/deliverables`, { method: 'POST', body: fd });
+      return (await (await fetch(`/api/milestones/${mid}/submit`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).json()).proposal.id; }, [mid, i === 0 ? ZIP : [...PNG1], i === 0 ? 'site.zip' : 'page.png']);
+    await C.evaluate(async (id) => { await fetch(`/api/proposals/${id}/approve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); }, prop);
+  }
+  for (const [who, P0, url] of [['freelancer', F, `/p/${pid}`], ['client', C, `/p/${pid}/project`]]) {
+    await P0.goto(base + '/#' + url); await P0.waitForSelector('#nextSlim');
+    const f = await P0.evaluate(() => ({ slim: document.querySelector('#nextSlim').className, next: !!document.querySelector('.mp-next'), open: [...document.querySelectorAll('.mp-msx__toggle')].map((t) => t.getAttribute('aria-expanded')),
+      labels: [...document.querySelectorAll('.mp-msx__toggle')].map((t) => t.innerText.trim()), tl: !!document.querySelector('#timeline'), tlBtn: document.querySelector('#timelineToggle')?.innerText.trim(), date: document.querySelector('#pjDate')?.innerText.trim(),
+      h2: [...document.querySelectorAll('#main h2')].map((h) => h.innerText.trim()), invite: !!document.querySelector('#inviteBox') }));
+    ok(`24 fully paid (${who}): slim success line, no action card`, /mp-alert--success/.test(f.slim) && !f.next);
+    ok(`24 fully paid (${who}): “Completed <date>” replaces “Due”`, /^Completed \d/.test(f.date));
+    ok(`24 fully paid (${who}): every row collapsed with a file count`, f.open.every((x) => x === 'false') && f.labels.every((l) => /^\d+ files?$/.test(l)));
+    ok(`24 fully paid (${who}): timeline behind “Show timeline”`, !f.tl && f.tlBtn === 'Show timeline' && !f.h2.includes('Deliverables') && !f.invite);
+    await shot(P0, `project-fully-paid-${who}`);
+    await P0.click('#timelineToggle'); await P0.waitForSelector('#timeline'); ok(`24 fully paid (${who}): the toggle opens the timeline`, (await P0.getAttribute('#timelineToggle', 'aria-expanded')) === 'true');
+  }
+  await F.click('[data-files="M2"]'); await F.waitForSelector('.mp-msx__panel:not([hidden]) .mp-file');
+  const zipRow = await F.evaluate(() => { const r = [...document.querySelectorAll('.mp-file')].find((x) => x.innerText.includes('site.zip')); return { eye: !!r.querySelector('[aria-label^="View"]'), dl: !!r.querySelector('[aria-label^="Download"]'), all: !!r.parentElement.querySelector('a[href$="/download-all"]') }; });
+  ok('24.5 a .zip has no preview icon but keeps Download and Download all', !zipRow.eye && zipRow.dl && zipRow.all);
+  await F.click('[data-files="M1"]'); await F.waitForFunction(() => document.querySelectorAll('.mp-msx__panel:not([hidden]) .mp-file').length >= 2);
+  ok('24.5 an image keeps its preview icon', await F.evaluate(() => !![...document.querySelectorAll('.mp-file')].find((x) => /\.png/.test(x.innerText))?.querySelector('[aria-label^="View"]')));
+
   // phone widths: no sideways scroll on the reworked screens
   const P = await (await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: await C.context().storageState() })).newPage(); watch(P, 'P');
   await P.goto(`${base}/#/p/${pid}`); await P.waitForSelector('.mp-paypage'); ok('13 payments fits a 390px phone', !(await overflows(P))); await shot(P, 'client-payments-phone');
   await P.goto(`${base}/#/settings`); await P.waitForSelector('#saveProfile'); ok('settings fits a 390px phone', !(await overflows(P)));
   const P2 = await (await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: await F.context().storageState() })).newPage(); watch(P2, 'P2');
   await P2.goto(`${base}/#/projects`); await P2.waitForSelector('.mp-jobrow'); ok('dashboard fits a 390px phone', !(await overflows(P2))); await shot(P2, 'dashboard-phone');
-  await P2.goto(`${base}/#/p/${pid}`); await P2.waitForSelector('#chat'); ok('project page fits a 390px phone', !(await overflows(P2)));
+  await P2.goto(`${base}/#/p/${pid}`); await P2.waitForSelector('#chat'); ok('project page fits a 390px phone', !(await overflows(P2))); await shot(P2, 'project-phone');
+  await P2.goto(`${base}/#/p/${pid}/changes`); await P2.waitForSelector('#earlierRequests'); ok('change requests fits a 390px phone', !(await overflows(P2)));
 
   fs.writeFileSync(out + '/results.txt', results.join('\n'));
   console.log(results.join('\n')); console.log('ERRORS', JSON.stringify(errors, null, 1));

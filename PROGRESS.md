@@ -64,6 +64,12 @@
 - [x] Invoices: issued per milestone once funded, client-approved, captured and paid out; view + download for both people (`invoice.js`).
 - Ran: `npm test`, `scripts/e2e.js` (PayPal stubbed), `tests/qa/journey-ui.cjs` and `tests/qa/fixes-ui.cjs` in headless Chromium, no console errors.
 
+## Fix list 2, 2026-11-11 (owner PDF, items 18-24)
+- [x] 18 client sees past requests + outcomes · 19 freelancer change-requests page: earlier requests first, paste box in the corner · 20 "Your jobs" → "Hired projects"
+- [x] 21 no LINE/WhatsApp wording · 22 long email wraps in the account menu · 23 archived + deleted projects in Settings, 15-day restore
+- [x] 24 project page redesign (header links, copy-invite icon, slim next step, files inside milestone rows, timeline toggle, "you" wording)
+- Ran: `npm test`, `scripts/e2e.js`, `tests/qa/journey-ui.cjs`, `tests/qa/fixes-ui.cjs` (headless Chromium, no console errors). PayPal stubbed.
+
 ## Status 2026-11-08
 All slices built and committed on branch `build/full-app`. `npm test` 110/110, `node scripts/e2e.js` 85/85 (PayPal stubbed), browser bug bash clean after fixes (reports/final.md).
 **Still needs a human:** one real sandbox run through the PayPal popup (authorize → submit → approve & pay → capture id; cancel → void) and a look at the ids in the sandbox dashboard. Gate 2 and the "ledger ids match PayPal" DoD item stay open until then.

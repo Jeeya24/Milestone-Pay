@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as db from '../../db.js';
 import { payoutFor } from '../../agent.js';
+import { purgeDueProjects } from '../../routes.js';
 import { tmpEnv, startApp, paypalStub, aiStub, login, makeProject, PNG } from './helpers.js';
 
 let app; let pp; let F; let C; let S;
@@ -57,19 +58,48 @@ test('archive hides a project for that member only and can be undone', async () 
   assert.equal((await S.call('POST', `/api/projects/${pid}/archive`, { archived: true })).status, 404);
 });
 
-test('delete project: freelancer only, erases rows and files, refused with a hold or payments', async () => {
+test('delete project: hidden at once, restorable for 15 days, then erased; refused with a hold or payments', async () => {
   const draft = await makeProject(F.call);
+  const inv = await F.call('POST', `/api/projects/${draft.pid}/invites`);
+  const token = new URL(inv.body.url).pathname.split('/').pop();
+  await C.call('POST', `/api/invites/${token}/accept`);
   const dir = path.join(process.env.UPLOAD_DIR, draft.pid);
   fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.txt'), 'x');
   assert.equal((await S.call('DELETE', `/api/projects/${draft.pid}`)).status, 404);
   const del = await F.call('DELETE', `/api/projects/${draft.pid}`);
   assert.equal(del.status, 200);
+  assert.equal(del.body.days, 15);
+  // gone for both people and from every route, but nothing is erased yet
+  for (const who of [F, C]) {
+    assert.equal((await who.call('GET', `/api/projects/${draft.pid}`)).status, 404);
+    assert.equal((await who.call('GET', '/api/projects')).body.projects.some((x) => x.id === draft.pid), false);
+  }
+  assert.equal((await F.call('PATCH', `/api/milestones/${draft.milestones[0].id}`, { amount_minor: 5 })).status, 404);
+  assert.equal((await F.call('POST', `/api/projects/${draft.pid}/invites`)).status, 404);
+  assert.equal((await app.call('GET', `/api/invite-preview/${token}`)).status, 404);
+  assert.equal(fs.existsSync(dir), true);
+  // only the freelancer sees it under deleted projects, and can restore it
+  const list = await F.call('GET', '/api/projects/deleted');
+  assert.deepEqual(list.body.projects.map((x) => x.id), [draft.pid]);
+  assert.equal(list.body.projects[0].restore_until, del.body.restore_until);
+  assert.deepEqual((await C.call('GET', '/api/projects/deleted')).body.projects, []);
+  assert.equal((await C.call('POST', `/api/projects/${draft.pid}/restore`)).status, 404);
+  assert.equal(purgeDueProjects(Date.now() + 14 * 864e5), 0);
+  const back = await F.call('POST', `/api/projects/${draft.pid}/restore`);
+  assert.equal(back.status, 200);
+  for (const who of [F, C]) assert.equal((await who.call('GET', `/api/projects/${draft.pid}`)).status, 200);
+  assert.equal((await F.call('GET', `/api/projects/${draft.pid}`)).body.milestones.length, 3);
+  assert.deepEqual((await F.call('GET', '/api/projects/deleted')).body.projects, []);
+  assert.equal(purgeDueProjects(Date.now() + 30 * 864e5), 0);
+  // deleted again and left for 15 days: erased for good, rows and files
+  await F.call('DELETE', `/api/projects/${draft.pid}`);
+  assert.equal(purgeDueProjects(Date.now() + 15 * 864e5 + 1000), 1);
   const d = db.load();
   for (const c of ['projects', 'agreements', 'milestones', 'messages', 'project_members', 'activity', 'invites']) {
     assert.equal(d[c].some((r) => r.id === draft.pid || r.project_id === draft.pid), false, c);
   }
   assert.equal(fs.existsSync(dir), false);
-  assert.equal((await F.call('GET', `/api/projects/${draft.pid}`)).status, 404);
+  assert.equal((await F.call('POST', `/api/projects/${draft.pid}/restore`)).status, 404);
 
   const p = await approved();
   assert.equal((await C.call('DELETE', `/api/projects/${p.pid}`)).body.error, 'WRONG_ROLE');

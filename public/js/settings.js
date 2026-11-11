@@ -2,6 +2,8 @@
 import { S, el, icon, api, go as goTo, mount, appShell, pageHead, alertBox, errBox, toast, tagPicker, homeRole, myName, switchRole, logout, initial, avatar, confirmDialog } from './core.js';
 import { OTHER } from './onboarding.js';
 
+const day = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); };
+
 const SKILLS = ['Web design', 'Branding', 'Illustration', 'Photography', 'Copywriting', 'Development', 'Video'];
 const HIRE = ['Website', 'Logo & branding', 'Photos', 'Social media', 'Writing'];
 
@@ -50,6 +52,31 @@ function pictureField() {
     picker, err);
 }
 
+/** Archived projects (open or bring back) and deleted projects (restore within 15 days). Filled in after the page shows. */
+function projectsCard() {
+  const body = el('div', { class: 'mp-stack mp-stack--4' }, el('p', { class: 'mp-t-sm mp-muted' }, 'Loading…'));
+  const load = async () => {
+    let list, gone;
+    try { [list, gone] = await Promise.all([api('/api/projects'), api('/api/projects/deleted')]); }
+    catch (e) { return body.replaceChildren(errBox(e)); }
+    const archived = list.projects.filter((p) => p.archived);
+    const row = (title, sub, ...btns) => el('div', { class: 'mp-setrow' }, el('div', { style: 'min-width:0' }, el('b', { class: 'mp-t-sm', style: 'overflow-wrap:anywhere' }, title), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, sub)), el('div', { class: 'mp-row', style: 'flex-wrap:nowrap' }, ...btns));
+    const act = (label, ic, fn, id) => { const b = el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', type: 'button', 'data-action': id, onclick: async () => { b.disabled = true; try { await fn(); load(); } catch (e) { b.disabled = false; toast(e.message, 'alert'); } } }, icon(ic), label); return b; };
+    body.replaceChildren(
+      el('div', { id: 'set-archived' }, el('h3', { class: 'mp-t-sub' }, `Archived · ${archived.length}`),
+        archived.length ? archived.map((p) => row(p.title || 'Untitled project', p.my_role === 'client' ? `From ${p.freelancer || 'a freelancer'} · hidden from Hired projects` : `${p.client ? `With ${p.client} · ` : ''}hidden from Your projects`,
+          el('a', { class: 'mp-btn mp-btn--ghost mp-btn--sm', href: `#/p/${p.id}` }, 'Open'),
+          act('Unarchive', 'undo', async () => { await api(`/api/projects/${p.id}/archive`, { body: { archived: false } }); toast('Moved back to your list'); }, 'unarchive')))
+          : el('p', { class: 'mp-t-sm mp-muted' }, 'Nothing archived. Archive a project from its row in your list to tidy it away; it stays open to you here.')),
+      el('div', { id: 'set-deleted' }, el('h3', { class: 'mp-t-sub' }, `Deleted · ${gone.projects.length}`),
+        gone.projects.length ? gone.projects.map((p) => row(p.title || 'Untitled project', `Deleted ${day(p.deleted_at)} · erased for good on ${day(p.restore_until)}`,
+          act('Restore', 'undo', async () => { await api(`/api/projects/${p.id}/restore`, { body: {} }); toast('Project restored. It’s back in your list.'); }, 'restore')))
+          : el('p', { class: 'mp-t-sm mp-muted' }, `Projects you delete stay here for ${gone.days} days so you can restore them. After that they’re erased for good.`)));
+  };
+  load();
+  return body;
+}
+
 export function viewSettings() {
   const role = homeRole();
   const roles = new Set(S.me.roles || []);
@@ -94,6 +121,7 @@ export function viewSettings() {
       el('nav', { class: 'mp-sidenav', 'aria-label': 'Settings sections' },
         el('a', { href: '#set-profile', onclick: go('set-profile'), class: 'on' }, icon(isClient ? 'building' : 'user'), isClient ? 'Business details' : 'Profile'),
         el('a', { href: '#set-paypal', onclick: go('set-paypal') }, icon('banknote'), 'PayPal'),
+        el('a', { href: '#set-projects', onclick: go('set-projects') }, icon('archive'), 'Archived & deleted'),
         el('a', { href: '#set-role', onclick: go('set-role') }, icon('briefcase'), 'Role'),
         el('a', { href: '#set-account', onclick: go('set-account') }, icon('lock'), 'Account')),
       el('div', { class: 'mp-stack mp-stack--6' },
@@ -109,14 +137,15 @@ export function viewSettings() {
           alertBox('success', 'check', el('b', {}, 'Signed in with PayPal'), S.me.email ? ` · ${S.me.email}` : '', el('div', {}, isClient ? 'You log in and pay with this account.' : 'You log in and get paid with this account.')),
           el('span', { class: 'mp-trust', style: 'justify-content:flex-start' }, icon('lock'), 'We never see your PayPal password, card or bank details. To use a different PayPal account, log out and continue with that one.'),
           alertBox('info', 'info', isClient ? 'Sandbox beta: fake money. Milestone Pay holds what you fund and releases it when you approve the work.' : 'Sandbox beta: fake money. Milestone Pay holds each payment and sends it to this PayPal account when your client approves the work.')),
+        card('set-projects', 'Archived and deleted projects', 'Open or bring back archived projects, and restore a deleted project within 15 days.', projectsCard()),
         card('set-role', 'Role', `You use Milestone Pay as a ${isClient ? 'client' : 'freelancer'}${roles.has(other) ? ` and a ${other}` : ''}.`,
-          el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, roles.has(other) ? `Switch to ${other === 'client' ? 'Your jobs' : 'Projects'}` : other === 'client' ? 'Hire people too?' : 'Freelance too?'),
+          el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, roles.has(other) ? `Switch to ${other === 'client' ? 'Hired projects' : 'Projects'}` : other === 'client' ? 'Hire people too?' : 'Freelance too?'),
             el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, roles.has(other) ? 'You can also switch from the menu in the top bar.' : `Add the ${other} role, then switch between them from the menu in the top bar.`)),
           el('button', { class: 'mp-btn mp-btn--secondary', onclick: () => switchRole(other, !roles.has(other)) }, icon(roles.has(other) ? 'refresh' : 'plus'), roles.has(other) ? 'Switch' : `Add ${other} role`))),
         card('set-account', 'Account', null,
           el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Email'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${S.me.email || 'Not shared'} · from PayPal`)),
             el('span', { class: 'mp-ok' }, icon('check'), 'Verified by PayPal')),
-          el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Log out'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'On this device. Your jobs and payments stay as they are.')),
+          el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Log out'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'On this device. Your projects and payments stay as they are.')),
             el('button', { class: 'mp-btn mp-btn--secondary', id: 'logoutBtn', onclick: logout }, icon('arrow-right'), 'Log out')),
           el('div', { class: 'mp-setrow' }, el('div', {}, el('b', { class: 'mp-t-sm' }, 'Delete account'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'Your data is deleted after 15 days. Log in before then to keep your account.')),
             del), delErr)))));

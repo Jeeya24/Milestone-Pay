@@ -12,16 +12,16 @@ const flash = () => { const f = C.flash; C.flash = null; return f; };
 
 // ---------------------------------------------------------------- 01b Your jobs
 export async function viewJobs() {
-  mount(appShell('client', pageHead('Your jobs'), skeleton()));
+  mount(appShell('client', pageHead('Hired projects'), skeleton()));
   let data;
   try { data = await api('/api/projects'); S.projects = data; }
-  catch (e) { return mount(appShell('client', pageHead('Your jobs'), errBox(e))); }
+  catch (e) { return mount(appShell('client', pageHead('Hired projects'), errBox(e))); }
   const allJobs = data.projects.filter((p) => p.my_role === 'client');
   const jobs = allJobs.filter((p) => !p.archived);
   const archived = allJobs.filter((p) => p.archived);
   if (!allJobs.length) {
-    return mount(appShell('client', pageHead('Your jobs'),
-      emptyState({ ic: 'briefcase', title: 'No jobs yet', text: 'When a freelancer sends you an agreement link, open it and the job shows up here, along with everything you fund and pay.' })));
+    return mount(appShell('client', pageHead('Hired projects'),
+      emptyState({ ic: 'briefcase', title: 'No projects yet', text: 'When a freelancer sends you an agreement link, open it and the project shows up here, along with everything you fund and pay.' })));
   }
   const ongoing = jobs.filter((p) => !['completed', 'stopped'].includes(p.status));
   const past = jobs.filter((p) => ['completed', 'stopped'].includes(p.status));
@@ -40,26 +40,26 @@ export async function viewJobs() {
   const row = (p) => el('div', { class: 'mp-card mp-card--raised mp-jobrow', 'data-project': p.id },
     el('div', { class: 'mp-jobrow__main' },
       el('div', { class: 'mp-stack', style: 'gap:6px;min-width:0' },
-        el('div', { class: 'mp-row mp-row--wrap' }, link(`/p/${p.id}`, { class: 'mp-t-sub mp-link-plain' }, p.title || 'Job'),
+        el('div', { class: 'mp-row mp-row--wrap' }, link(`/p/${p.id}`, { class: 'mp-t-sub mp-link-plain' }, p.title || 'Project'),
           p.current?.status === 'submitted' ? badge('pending', 'inbox', `${p.current.label} ready to review`) : p.agreement_status === 'sent' ? badge('pending', 'file', 'Agreement to approve') : projectBadge(p)),
         el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted', style: 'gap:16px' }, el('span', { class: 'mp-row' }, icon('user'), p.freelancer || 'Freelancer'),
           p.deadline ? el('span', { class: 'mp-row' }, icon('calendar'), `Due ${p.deadline}`) : null)),
       el('div', { class: 'mp-jobrow__money' }, moneyEl(p.total_minor, p.currency, 'md'),
         el('div', { class: 'mp-progress' }, el('div', { class: 'mp-progress__label' }, el('span', {}, el('b', {}, `${p.paid_count} of ${p.milestones.length}`), ' paid'), p.held_minor ? el('span', {}, `${fmtNum(p.held_minor)} held`) : null),
           el('div', { class: 'mp-progress__bar' }, p.milestones.map((m) => el('span', { class: `mp-progress__seg ${m.status === 'paid' ? 'mp-progress__seg--paid' : ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? 'mp-progress__seg--held' : ''}` }))))),
-      el('div', { class: 'mp-jobrow__actions' }, link(`/p/${p.id}`, { class: 'mp-btn mp-btn--secondary', 'aria-label': `Open ${p.title || 'job'}` }, 'Open', icon('arrow-right')), projectActions(p, viewJobs))));
-  mount(appShell('client', pageHead('Your jobs', 'Everything you’ve agreed, funded and paid, in one place.'),
+      el('div', { class: 'mp-jobrow__actions' }, link(`/p/${p.id}`, { class: 'mp-btn mp-btn--secondary', 'aria-label': `Open ${p.title || 'project'}` }, 'Open', icon('arrow-right')), projectActions(p, viewJobs))));
+  mount(appShell('client', pageHead('Hired projects', 'Everything you’ve agreed, funded and paid, in one place.'),
     next,
     el('div', { class: 'mp-grid-3' },
       stat('lock', 'Held by Milestone Pay', data.client_totals.held_minor, cur, 'Your money, waiting for you to approve the work.'),
-      stat('check', 'Paid to freelancers', data.client_totals.paid_minor, cur, 'Across all your jobs.'),
-      el('div', { class: 'mp-stat' }, el('span', { class: 'mp-row mp-t-sm mp-muted' }, icon('briefcase'), 'Jobs'),
+      stat('check', 'Paid to freelancers', data.client_totals.paid_minor, cur, 'Across all your projects.'),
+      el('div', { class: 'mp-stat' }, el('span', { class: 'mp-row mp-t-sm mp-muted' }, icon('briefcase'), 'Projects'),
         el('span', { class: 'mp-stat__value mp-num' }, String(ongoing.length), el('small', {}, 'ongoing')), el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${past.length} past`))),
     ongoing.length ? el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, `Ongoing · ${ongoing.length}`), ongoing.map(row)) : null,
     past.length ? el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, `Past · ${past.length}`),
       el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Job'), el('th', {}, 'Status'), el('th', { class: 'num' }, 'Total'), el('th'))),
-        el('tbody', {}, past.map((p) => el('tr', {}, el('td', {}, el('b', {}, p.title || 'Job'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, p.freelancer || '')),
+        el('thead', {}, el('tr', {}, el('th', {}, 'Project'), el('th', {}, 'Status'), el('th', { class: 'num' }, 'Total'), el('th'))),
+        el('tbody', {}, past.map((p) => el('tr', {}, el('td', {}, el('b', {}, p.title || 'Project'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, p.freelancer || '')),
           el('td', {}, p.status === 'completed' ? badge('success', 'check', 'Completed') : badge('neutral', 'x', 'Cancelled')),
           el('td', { class: 'num mp-num mp-strong' }, `${money(p.paid_minor, p.currency)} ${p.status === 'completed' ? 'paid' : 'paid'}`),
           el('td', { style: 'width:1%' }, el('div', { class: 'mp-row', style: 'flex-wrap:nowrap;gap:0' }, link(`/p/${p.id}/project`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, 'View'), projectActions(p, viewJobs))))))))) : null,
@@ -71,7 +71,7 @@ export async function viewJobs() {
 export function viewClientProject(d) {
   if (!d.agreement || d.agreement.status === 'draft') {
     stopPoll();
-    mount(appShell('client', back('/jobs', 'Your jobs'),
+    mount(appShell('client', back('/jobs', 'Hired projects'),
       emptyState({ ic: 'link', title: 'Nothing here yet', text: `${names(d).fname} hasn’t shared an agreement with you. Check the link they sent, or ask them to send it again.` })));
     poll(d.project.id, () => d, (x) => viewClientProject(x));
     return;
@@ -103,7 +103,7 @@ function viewApprove(d, keep = false) {
     catch (e) { toast(e.message, 'alert'); }
   };
   const f = flash();
-  (keep ? mountKeep : mount)(appShell('client', back('/jobs', 'Your jobs'),
+  (keep ? mountKeep : mount)(appShell('client', back('/jobs', 'Hired projects'),
     el('div', { class: 'mp-narrow mp-stack mp-stack--4' },
       el('div', { class: 'mp-stack', style: 'gap:2px' }, caption(d), el('h1', { class: 'mp-t-title' }, b.title || 'Agreement')),
       f === 'note' ? alertBox('success', 'check', el('b', {}, `Note sent to ${fname}. `), 'You’ll see the reply here. Nothing is approved or charged yet.')
@@ -229,7 +229,7 @@ export function viewPayments(d, keep = false) {
   const sumRow = (k, v) => el('div', { class: 'mp-summary__row' }, el('span', {}, k), el('span', { class: 'mp-num mp-strong' }, v));
   const redraw = (x) => { d = x; viewPayments(x, true); };
   // Desktop: milestones on the left, a summary column on the right. Phone: one column, summary first.
-  (keep ? mountKeep : mount)(appShell('client', back('/jobs', 'Your jobs'),
+  (keep ? mountKeep : mount)(appShell('client', back('/jobs', 'Hired projects'),
     el('div', { class: 'mp-paypage' },
       el('div', { class: 'mp-paypage__head' },
         el('div', { class: 'mp-stack', style: 'gap:2px;min-width:0' }, el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, 'Payments'), el('h1', { class: 'mp-t-title' }, titleOf(d))),
@@ -251,8 +251,9 @@ export function viewPayments(d, keep = false) {
           el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${fname} will check it against your agreement. If it’s new work, you’ll get a price here to accept or decline. Nothing changes until you accept.`)) : null,
         el('div', { class: 'mp-card mp-card--raised mp-stack' },
           el('h2', { class: 'mp-t-sub' }, 'Need something else?'),
-          openReq || quote ? el('button', { class: 'mp-btn mp-btn--secondary mp-btn--block', disabled: true }, `Request a change · 1 open`) : link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, icon('plus'), 'Request a change'),
+          openReq || quote ? link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, icon('chat'), 'Your requests · 1 open') : link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--secondary mp-btn--block' }, icon('plus'), 'Request a change'),
           openReq || quote ? el('p', { class: 'mp-t-caption mp-muted', style: 'text-align:center;font-weight:400' }, `You can send another once ${fname} answers this one.`) : null,
+          !(openReq || quote) && (d.change_requests || []).length ? link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--ghost mp-btn--block', id: 'pastRequests' }, icon('clock'), `Your earlier requests · ${d.change_requests.length}`) : null,
           link(`/p/${pid}/project`, { class: 'mp-btn mp-btn--ghost mp-btn--block' }, icon('file'), 'Project details and history')),
         sandboxNote()))));
   poll(pid, () => d, (x) => { if (document.querySelector('.mp-pp-host iframe')) return; d = x; viewPayments(x, true); }, () => C.busy);
@@ -343,22 +344,41 @@ export function viewRevision(d, mid) {
 }
 
 // ---------------------------------------------------------------- 08 Request a change (client)
-export function viewRequestChange(d) {
-  stopPoll();
+const CR_KIND = { new_work: 'New work', in_scope: 'Already in the agreement', revision: 'A revision' };
+/** What became of a request, in the client's words. */
+function requestResult(c, fname) {
+  if (c.status === 'accepted') return [badge('success', 'check', 'Accepted'), `You accepted ${fname}’s price${c.sent_version ? `: ${c.sent_version.title}, ${money(c.sent_version.amount_minor || 0)}` : ''}. It was added as a new milestone.`];
+  if (c.status === 'declined') return [badge('neutral', 'x', 'Declined'), `You declined ${fname}’s price. The agreement stayed as it was.`];
+  if (c.status === 'closed') return [badge('neutral', 'check', 'Closed'), c.classification === 'in_scope' ? `${fname} closed it: this is already covered by your agreement, so there is no extra price.`
+    : c.classification === 'revision' ? `${fname} closed it: this counts as a revision of work already agreed, so there is no extra price.` : `${fname} closed it without a price.`];
+  if (c.status === 'sent') return [badge('pending', 'plus', 'Price waiting for you'), `${fname} sent a price. Accept or decline it on the Payments page.`];
+  return [badge('pending', 'clock', 'Waiting'), `${fname} is checking it against your agreement. Nothing changes until you accept a price.`];
+}
+/** The client's requests: the open one (or the form to send a new one), then every earlier request and its result. */
+export function viewRequestChange(d, keep = false) {
   const { fname } = names(d); const pid = d.project.id;
-  const open = (d.change_requests || []).find((c) => c.status === 'open' || c.status === 'sent');
-  if (open) { toast(`You have a request open with ${fname}. You can send another once they answer.`, 'info'); return go(`/p/${pid}`); }
-  const ta = el('textarea', { class: 'mp-input', id: 'crText', rows: 5, maxlength: 1000, placeholder: 'Can you add an online ordering page?', value: C.crText, oninput: () => { C.crText = ta.value; send.disabled = ta.value.trim().length < 5; } });
+  const all = [...(d.change_requests || [])].reverse();
+  const open = all.find((c) => c.status === 'open' || c.status === 'sent');
+  const past = all.filter((c) => c !== open);
+  const ta = el('textarea', { class: 'mp-input', id: 'crText', rows: 4, maxlength: 1000, placeholder: 'Can you add an online ordering page?', value: C.crText, oninput: () => { C.crText = ta.value; send.disabled = ta.value.trim().length < 5; } });
   const err = el('div');
-  const send = el('button', { class: 'mp-btn mp-btn--primary mp-btn--block', disabled: C.crText.trim().length < 5, onclick: async () => {
+  const send = el('button', { class: 'mp-btn mp-btn--primary', disabled: C.crText.trim().length < 5, onclick: async () => {
     send.disabled = true; send.replaceChildren(el('span', { class: 'mp-spinner', style: 'width:16px;height:16px;border-top-color:var(--on-ink)' }), 'Sending…');
     try { await api(`/api/projects/${pid}/change-requests`, { body: { message: ta.value.trim() } }); C.crText = ''; C.flash = 'request'; go(`/p/${pid}`); }
     catch (e) { send.disabled = false; send.replaceChildren(icon('send'), `Send to ${fname}`); err.replaceChildren(errBox(e)); }
   } }, icon('send'), `Send to ${fname}`);
-  mount(appShell('client', back(`/p/${pid}`, 'Payments'),
-    el('div', { class: 'mp-narrow mp-stack mp-stack--4' }, el('div', { class: 'mp-stack', style: 'gap:2px' }, caption(d), el('h1', { class: 'mp-t-title' }, 'Need something else?')),
-      el('div', { class: 'mp-card mp-card--raised mp-field' }, el('label', { class: 'mp-label', for: 'crText' }, 'What would you like to change or add?'), ta,
-        el('span', { class: 'mp-help' }, `${fname} reviews it first. You’re only charged if you accept a price.`)),
-      err, el('div', { class: 'mp-stack mp-sticky-cta' }, send, link(`/p/${pid}`, { class: 'mp-btn mp-btn--ghost mp-btn--block' }, 'Back')))));
-  ta.focus();
+  const item = (c) => { const [b, why] = requestResult(c, fname); return el('div', { class: 'mp-reqitem', 'data-request': c.id },
+    el('div', { class: 'mp-row mp-row--between mp-row--wrap' }, el('span', { class: 'mp-t-caption mp-muted' }, `${c.from === 'client' ? 'You asked' : `${fname} raised it`} · ${fmtDate(c.created_at)}${CR_KIND[c.classification] ? ` · ${CR_KIND[c.classification]}` : ''}`), b),
+    el('p', { class: 'mp-reqitem__text' }, c.text), el('p', { class: 'mp-t-sm mp-muted' }, why)); };
+  (keep ? mountKeep : mount)(appShell('client', back(`/p/${pid}`, 'Payments'),
+    el('div', { class: 'mp-narrow mp-stack mp-stack--4' }, el('div', { class: 'mp-stack', style: 'gap:2px' }, caption(d), el('h1', { class: 'mp-t-title' }, 'Your requests'),
+      el('p', { class: 'mp-muted' }, `Ask ${fname} for a change or something extra. They check it against your agreement, and you’re only charged if you accept a price.`)),
+      open ? el('div', { class: 'mp-card mp-card--current mp-stack', id: 'openRequest' }, el('h2', { class: 'mp-t-sub' }, 'Open request'), item(open),
+        open.status === 'sent' ? el('div', {}, link(`/p/${pid}`, { class: 'mp-btn mp-btn--primary' }, 'See the price', icon('arrow-right'))) : null,
+        el('p', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `You can send another once ${fname} answers this one.`))
+        : el('div', { class: 'mp-card mp-card--raised mp-stack mp-stack--3' }, el('div', { class: 'mp-field' }, el('label', { class: 'mp-label', for: 'crText' }, 'What would you like to change or add?'), ta), el('div', {}, send), err),
+      el('div', { class: 'mp-stack mp-stack--3', id: 'requestHistory' }, el('h2', { class: 'mp-t-section' }, `Earlier requests${past.length ? ` · ${past.length}` : ''}`),
+        past.length ? el('div', { class: 'mp-card mp-card--raised mp-reqlist' }, past.map(item)) : el('p', { class: 'mp-muted mp-t-sm' }, 'Requests you’ve sent, and what happened to each, will be listed here.')),
+      link(`/p/${pid}`, { class: 'mp-btn mp-btn--ghost mp-btn--block' }, 'Back to payments'))));
+  poll(pid, () => d, (x) => { d = x; viewRequestChange(x, true); });
 }

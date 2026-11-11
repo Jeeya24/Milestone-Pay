@@ -1,6 +1,6 @@
 # Milestone Pay
 
-Turns a LINE/WhatsApp freelance chat into a milestone agreement. The client authorizes each milestone with PayPal (shown to users as held by Milestone Pay), the freelancer delivers, the client approves, an agent captures and pays the freelancer out. PayPal sandbox only. Hackathon MVP: working beats pretty.
+Turns a freelance chat (any messaging app) into a milestone agreement. The client authorizes each milestone with PayPal (shown to users as held by Milestone Pay), the freelancer delivers, the client approves, an agent captures and pays the freelancer out. PayPal sandbox only. Hackathon MVP: working beats pretty.
 
 ## Docs
 - `SPEC.md`: decisions, money flow, security, model plan

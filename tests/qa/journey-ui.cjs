@@ -80,7 +80,7 @@ const txt = (p) => p.evaluate(() => document.body.innerText);
   await C.reload(); await C.waitForSelector('text=Not in agreement'); await btn(C, /^Accept/).click(); await C.waitForSelector('.mp-dialog'); await shot(C, 'client-accept-confirm');
   await C.locator('.mp-dialog .mp-btn--primary').click(); await C.waitForSelector('text=M4 added'); ok('08 M4 added', true);
   // jobs dashboard + settings + logout
-  await C.goto(`${base}/#/jobs`); await C.waitForSelector('h1:has-text("Your jobs")'); await shot(C, 'client-jobs');
+  await C.goto(`${base}/#/jobs`); await C.waitForSelector('h1:has-text("Hired projects")'); await shot(C, 'client-jobs');
   await F.goto(`${base}/#/projects`); await F.waitForSelector('.mp-jobrow'); await shot(F, 'freelancer-dashboard');
   await F.goto(`${base}/#/p/${pid}/project`); await F.waitForSelector('text=Payment history'); await shot(F, 'project-page-2');
   await F.goto(`${base}/#/p/${pid}/activity`); await F.waitForSelector('text=Activity'); await shot(F, 'activity');
