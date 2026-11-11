@@ -84,35 +84,6 @@ export async function createAuthOrder(milestone, attempt = 1) {
   });
 }
 
-/** Funding order: the client is charged when they confirm, and the money sits on the Milestone Pay account. */
-export async function createCaptureOrder(milestone, attempt = 1) {
-  const cur = currency();
-  return call('POST', '/v2/checkout/orders', {
-    requestId: `order-${milestone.id}-${attempt}`,
-    body: {
-      intent: 'CAPTURE',
-      purchase_units: [{
-        custom_id: milestone.id,
-        description: milestone.title,
-        amount: toMoney(milestone.amount_minor, cur),
-      }],
-      payment_source: {
-        paypal: { experience_context: { user_action: 'PAY_NOW', shipping_preference: 'NO_SHIPPING' } },
-      },
-    },
-  });
-}
-
-/** Capture an approved funding order. A capture has no expiry: the money stays until it is paid out or refunded. */
-export async function captureOrder(orderId) {
-  const d = await call('POST', `/v2/checkout/orders/${orderId}/capture`, {
-    requestId: `ordcap-${orderId}`, body: {},
-  });
-  const c = d.purchase_units?.[0]?.payments?.captures?.[0];
-  if (!c) throw new PayPalError(502, { name: 'NO_CAPTURE' }, null);
-  return { capture_id: c.id, status: c.status };
-}
-
 export async function authorizeOrder(orderId) {
   const d = await call('POST', `/v2/checkout/orders/${orderId}/authorize`, {
     requestId: `auth-${orderId}`, body: {},

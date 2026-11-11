@@ -33,22 +33,19 @@ function check(name, cond, detail) {
 const section = (s) => console.log(`\n== ${s}`);
 
 // ---- PayPal stub that records everything -------------------------------------
-// fund = capture of the funding order (the client is charged); payout = release to the freelancer; refund = money back.
-const calls = { order: [], fund: [], payout: [], refund: [], getOrder: [], other: [] };
+const calls = { order: [], authorize: [], capture: [], void: [], getOrder: [], other: [] };
 let n = 0;
 const paypal = {
   currency: () => 'USD',
-  createCaptureOrder: async (m, attempt) => { calls.order.push({ amount_minor: m.amount_minor, id: m.id, attempt }); return { id: `ORDER${++n}`, status: 'CREATED' }; },
-  captureOrder: async (o) => { calls.fund.push(o); return { capture_id: `CAP-${o}`, status: 'COMPLETED' }; },
-  createPayout: async (a) => { calls.payout.push(a); await new Promise((r) => setTimeout(r, 25)); return { batch_id: `BATCH-${calls.payout.length}`, status: 'PENDING' }; },
-  refundCapture: async (c) => { calls.refund.push(c); return { id: `REF-${c}`, status: 'COMPLETED' }; },
-  getOrder: async (o) => { calls.getOrder.push(o); return { id: o, status: 'COMPLETED', purchase_units: [{ payments: { captures: [{ id: `CAP-${o}`, status: 'COMPLETED' }] } }] }; },
-  // The authorize-then-capture calls are not part of the flow any more.
-  captureAuth: async (...a) => { calls.other.push(['captureAuth', ...a]); throw new Error('captureAuth must not be called'); },
-  voidAuth: async (...a) => { calls.other.push(['voidAuth', ...a]); throw new Error('voidAuth must not be called'); },
+  createAuthOrder: async (m, attempt) => { calls.order.push({ amount_minor: m.amount_minor, id: m.id, attempt }); return { id: `ORDER${++n}`, status: 'CREATED' }; },
+  authorizeOrder: async (o) => { calls.authorize.push(o); return { authorization_id: `AUTH-${o}`, status: 'CREATED', expires_at: '2027-01-01T00:00:00Z' }; },
+  captureAuth: async (a) => { calls.capture.push(a); await new Promise((r) => setTimeout(r, 25)); return { id: `CAP-${a}`, status: 'COMPLETED' }; },
+  voidAuth: async (a) => { calls.void.push(a); return { status: 'VOIDED' }; },
+  getOrder: async (o) => { calls.getOrder.push(o); return { id: o, status: 'COMPLETED', purchase_units: [{ payments: { authorizations: [{ id: `AUTH-${o}`, status: 'CREATED' }] } }] }; },
+  refundCapture: async (...a) => { calls.other.push(['refund', ...a]); throw new Error('refund must not be called'); },
 };
 const ppTotal = () => Object.values(calls).reduce((s, a) => s + a.length, 0);
-const ppNoGet = () => calls.order.length + calls.fund.length + calls.payout.length + calls.refund.length;
+const ppNoGet = () => calls.order.length + calls.authorize.length + calls.capture.length + calls.void.length;
 
 // ---- the model the agent sees (scripted, records every prompt) ----------------
 const seenPrompts = [];
@@ -63,8 +60,8 @@ const scriptedModel = () => new MockLanguageModelV1({
     const find = (action, status) => state.proposals.find((p) => p.action === action && p.status === status);
     let calls_ = [];
     if (event === 'milestone.submitted') calls_ = [['get_order', {}], ['propose_release', {}], ['notify', { template: 'review_client' }]];
-    else if (event === 'proposal.approved') calls_ = [['release_payment', { proposal_id: find('release', 'approved')?.id }], ['notify', { template: 'paid_freelancer' }], ['notify', { template: 'fund_next_client' }]];
-    else if (event === 'proposal.refund_accepted') calls_ = [['refund_payment', { proposal_id: find('refund', 'approved')?.id }], ['notify', { template: 'refunded_both' }]];
+    else if (event === 'proposal.approved') calls_ = [['capture_authorization', { proposal_id: find('release', 'approved')?.id }], ['notify', { template: 'paid_freelancer' }], ['notify', { template: 'fund_next_client' }]];
+    else if (event === 'proposal.voided') calls_ = [['void_authorization', { proposal_id: find('void', 'approved')?.id }], ['notify', { template: 'voided_both' }]];
     return {
       rawCall: { rawPrompt: null, rawSettings: {} }, finishReason: 'tool-calls', usage: { promptTokens: 600, completionTokens: 40 },
       toolCalls: calls_.map((c, k) => ({ toolCallType: 'function', toolCallId: `c${seenPrompts.length}-${k}`, toolName: c[0], args: JSON.stringify(c[1]) })),
@@ -107,7 +104,7 @@ const asF = (m, u, b) => raw(m, u, b, F.cookie);
 const asC = (m, u, b) => raw(m, u, b, C.cookie);
 const asS = (m, u, b) => raw(m, u, b, S.cookie);
 // Client-only routes go as C; a body with party/from 'client' (kept from the single-user script) also means C.
-const CLIENT_ROUTE = /\/(order|authorize|revision|decide|refund-request)$|^\/api\/proposals\/[^/]+\/(approve|withdraw-refund)$/;
+const CLIENT_ROUTE = /\/(order|authorize|revision|decide)$|^\/api\/proposals\/[^/]+\/(approve|cancel)$/;
 const call = (method, url, body) => {
   const client = CLIENT_ROUTE.test(url) || (body && !(body instanceof FormData) && (body.party === 'client' || body.from === 'client'));
   return client ? asC(method, url, body) : asF(method, url, body);
@@ -204,13 +201,13 @@ try {
   const o1b = await call('POST', `/api/milestones/${m1id}/order`);
   check('second /order returns the same order, no new PayPal order', o1b.body.order_id === o1.body.order_id && calls.order.length === 1);
   const bogus = await call('POST', `/api/milestones/${m1id}/authorize`, { order_id: 'WRONGORDER' });
-  check('authorize with a different order id = 409 ORDER_MISMATCH, 0 funding captures', bogus.status === 409 && bogus.body.error === 'ORDER_MISMATCH' && calls.fund.length === 0, bogus.body);
+  check('authorize with a different order id = 409 ORDER_MISMATCH, 0 authorize calls', bogus.status === 409 && bogus.body.error === 'ORDER_MISMATCH' && calls.authorize.length === 0, bogus.body);
   const a1 = await call('POST', `/api/milestones/${m1id}/authorize`, { order_id: o1.body.order_id });
-  check('M1 funded -> HELD with a capture id and no expiry', a1.status === 200 && a1.body.payment.status === 'HELD' && a1.body.payment.capture_id === `CAP-${o1.body.order_id}` && a1.body.payment.expires_at === null, a1.body);
+  check('M1 authorize -> AUTHORIZED with authorization_id', a1.status === 200 && a1.body.payment.status === 'AUTHORIZED' && a1.body.payment.authorization_id === `AUTH-${o1.body.order_id}`, a1.body);
   const a1b = await call('POST', `/api/milestones/${m1id}/authorize`, { order_id: o1.body.order_id });
-  check('repeat authorize = same payment, client charged once', a1b.status === 200 && a1b.body.payment.capture_id === a1.body.payment.capture_id && calls.fund.length === 1);
+  check('repeat authorize = same payment, still 1 authorize call', a1b.status === 200 && a1b.body.payment.authorization_id === a1.body.payment.authorization_id && calls.authorize.length === 1);
   v = await view(pid);
-  check('ledger has HELD for M1', v.ledger.some((l) => l.label === 'M1' && l.event === 'HELD' && l.amount_minor === 24000));
+  check('ledger has AUTHORIZED for M1', v.ledger.some((l) => l.label === 'M1' && l.event === 'AUTHORIZED' && l.amount_minor === 24000));
   check('submit before any upload = 409 NO_FILES', (await call('POST', `/api/milestones/${m1id}/submit`)).body?.error === 'NO_FILES');
   const badFile = new FormData(); badFile.append('files', new Blob(['not a png'], { type: 'image/png' }), 'fake.png');
   check('fake PNG (bad magic bytes) = 400 BAD_FILE', (await call('POST', `/api/milestones/${m1id}/deliverables`, badFile)).body?.error === 'BAD_FILE');
@@ -222,24 +219,24 @@ try {
   const s1 = await call('POST', `/api/milestones/${m1id}/submit`);
   const prop1 = s1.body.proposal;
   check('submit -> submitted, pending release proposal, agent run', s1.status === 200 && s1.body.milestone.status === 'submitted' && prop1?.status === 'pending' && prop1?.action === 'release' && s1.body.agent_run, s1.body?.error);
-  check('submit made zero money calls', calls.payout.length === 0 && calls.refund.length === 0);
+  check('submit made zero money calls', calls.capture.length === 0 && calls.void.length === 0);
   const ap1 = await call('POST', `/api/proposals/${prop1.id}/approve`, { party: 'client' });
-  check('approve & pay M1 -> released, 1 payout, no second charge', ap1.status === 200 && ap1.body.payment.status === 'CAPTURED' && ap1.body.payment.capture_id === `CAP-${o1.body.order_id}` && calls.payout.length === 1 && calls.payout[0].amount_minor === 24000 && calls.fund.length === 1, ap1.body);
+  check('approve & pay M1 -> CAPTURED, 1 capture call', ap1.status === 200 && ap1.body.payment.status === 'CAPTURED' && ap1.body.payment.capture_id === `CAP-AUTH-${o1.body.order_id}` && calls.capture.length === 1, ap1.body);
   check('next = M2', ap1.body.next?.label === 'M2' && ap1.body.next.milestone_id === m2id, ap1.body.next);
   v = await view(pid);
   check('ledger CAPTURED for M1 with capture id', v.ledger.some((l) => l.label === 'M1' && l.event === 'CAPTURED' && l.paypal_id === ap1.body.payment.capture_id));
   check('client notification names M2', v.notifications.some((x) => x.to === 'client' && /M2/.test(x.text) && /fund/i.test(x.text)), v.notifications.map((x) => x.text));
   check('freelancer notified M1 paid', v.notifications.some((x) => x.to === 'freelancer' && /M1/.test(x.text)));
   const ap1b = await call('POST', `/api/proposals/${prop1.id}/approve`, { party: 'client' });
-  check('second approve = same result, still 1 payout', ap1b.status === 200 && ap1b.body.payment.capture_id === ap1.body.payment.capture_id && calls.payout.length === 1, { s: ap1b.status, c: calls.payout.length, b: ap1b.body?.error });
+  check('second approve = same result, still 1 capture', ap1b.status === 200 && ap1b.body.payment.capture_id === ap1.body.payment.capture_id && calls.capture.length === 1, { s: ap1b.status, c: calls.capture.length, b: ap1b.body?.error });
   const [ra, rb] = await Promise.all([1, 2].map(() => call('POST', `/api/proposals/${prop1.id}/approve`, { party: 'client' })));
-  check('concurrent approves still 1 payout', calls.payout.length === 1 && ra.status < 300 && rb.status < 300);
+  check('concurrent approves still 1 capture', calls.capture.length === 1 && ra.status < 300 && rb.status < 300);
   check('freelancer approving a release = 403 WRONG_ROLE', (await asF('POST', `/api/proposals/${prop1.id}/approve`, {})).body?.error === 'WRONG_ROLE');
 
   // =========================================================================
   section('M2 with one revision round');
   const f2 = await fundAuthorize(m2id);
-  check('M2 order + authorize', f2.a.status === 200 && f2.a.body.payment.status === 'HELD', f2.a.body);
+  check('M2 order + authorize', f2.a.status === 200 && f2.a.body.payment.status === 'AUTHORIZED', f2.a.body);
   const w2 = await submitWork(m2id);
   const prop2 = w2.s.body.proposal;
   check('M2 submitted with pending proposal', w2.s.status === 200 && prop2?.status === 'pending', w2.s.body);
@@ -247,14 +244,14 @@ try {
   const rev = await call('POST', `/api/milestones/${m2id}/revision`, { note: REV_NOTE });
   check('revision -> revision_requested, rev_count 1, note stored raw', rev.status === 200 && rev.body.milestone.status === 'revision_requested' && rev.body.milestone.rev_count === 1 && rev.body.milestone.rev_note === REV_NOTE, rev.body);
   const stale = await call('POST', `/api/proposals/${prop2.id}/approve`, { party: 'client' });
-  check('approving the withdrawn proposal = 409 PROPOSAL_NOT_PENDING, no payout', stale.status === 409 && stale.body.error === 'PROPOSAL_NOT_PENDING' && calls.payout.length === 1, stale.body);
+  check('approving the withdrawn proposal = 409 PROPOSAL_NOT_PENDING, no capture', stale.status === 409 && stale.body.error === 'PROPOSAL_NOT_PENDING' && calls.capture.length === 1, stale.body);
   const u2 = await upload(m2id, 'v2.png');
   check('re-upload is version 2', u2.status === 201 && u2.body.version === 2, u2.body);
   const s2 = await call('POST', `/api/milestones/${m2id}/submit`);
   const prop2b = s2.body.proposal;
   check('re-submit -> new pending proposal', s2.status === 200 && prop2b?.status === 'pending' && prop2b.id !== prop2.id, s2.body?.error);
   const ap2 = await call('POST', `/api/proposals/${prop2b.id}/approve`, { party: 'client' });
-  check('approve & pay M2 -> released, payouts = 2, next = M3', ap2.status === 200 && ap2.body.payment.status === 'CAPTURED' && calls.payout.length === 2 && ap2.body.next?.label === 'M3', ap2.body?.error);
+  check('approve & pay M2 -> CAPTURED, captures = 2, next = M3', ap2.status === 200 && ap2.body.payment.status === 'CAPTURED' && calls.capture.length === 2 && ap2.body.next?.label === 'M3', ap2.body?.error);
 
   // =========================================================================
   section('Step 8: scope creep (M3 is current, unpaid)');
@@ -283,58 +280,48 @@ try {
   const f3 = await fundAuthorize(m3id);
   const w3 = await submitWork(m3id);
   const ap3 = await call('POST', `/api/proposals/${w3.s.body.proposal.id}/approve`, { party: 'client' });
-  check('M3 funded, submitted, paid; next = M4', f3.a.status === 200 && ap3.status === 200 && ap3.body.payment.status === 'CAPTURED' && ap3.body.next?.label === 'M4' && calls.payout.length === 3, ap3.body?.error);
+  check('M3 funded, submitted, paid; next = M4', f3.a.status === 200 && ap3.status === 200 && ap3.body.payment.status === 'CAPTURED' && ap3.body.next?.label === 'M4' && calls.capture.length === 3, ap3.body?.error);
   const f4 = await fundAuthorize(m4id);
   check('M4 order uses db amount (20000), authorize ok', f4.a.status === 200 && calls.order.at(-1).amount_minor === 20000, calls.order.at(-1));
   const w4 = await submitWork(m4id);
   const ap4 = await call('POST', `/api/proposals/${w4.s.body.proposal.id}/approve`, { party: 'client' });
-  check('M4 paid; next = null; 4 payouts total', ap4.status === 200 && ap4.body.payment.status === 'CAPTURED' && ap4.body.next === null && calls.payout.length === 4, ap4.body);
+  check('M4 paid; next = null; 4 captures total', ap4.status === 200 && ap4.body.payment.status === 'CAPTURED' && ap4.body.next === null && calls.capture.length === 4, ap4.body);
   const dash = await call('GET', '/api/projects');
   check('dashboard: paid = $1000, held = 0, project completed', dash.body.totals.paid_minor === 100000 && dash.body.totals.held_minor === 0 && dash.body.projects.find((p) => p.id === pid)?.status === 'completed', { totals: dash.body.totals, st: dash.body.projects.find((p) => p.id === pid)?.status });
   v = await view(pid);
-  check('ledger: 4 HELD + 4 CAPTURED, no VOIDED', v.ledger.filter((l) => l.event === 'HELD').length === 4 && v.ledger.filter((l) => l.event === 'CAPTURED').length === 4 && !v.ledger.some((l) => l.event === 'VOIDED'));
+  check('ledger: 4 AUTHORIZED + 4 CAPTURED, no VOIDED', v.ledger.filter((l) => l.event === 'AUTHORIZED').length === 4 && v.ledger.filter((l) => l.event === 'CAPTURED').length === 4 && !v.ledger.some((l) => l.event === 'VOIDED'));
   const refresh = await call('POST', `/api/projects/${pid}/refresh`);
   check('refresh from PayPal -> 200 with a row per payment', refresh.status === 200 && refresh.body.payments.length === 4, refresh.body);
 
   // =========================================================================
-  section('Second project: fund -> refund only when the freelancer accepts');
+  section('Second project: authorize -> cancel & release hold (void)');
   const P2 = await newReadyProject();
   const p2m1 = ms(await view(P2.pid), 'M1').id;
-  const capBefore = calls.payout.length;
+  const capBefore = calls.capture.length;
   const f21 = await fundAuthorize(p2m1);
   check('P2 M1 authorized', f21.a.status === 200);
   const w21 = await submitWork(p2m1);
   const prop21 = w21.s.body.proposal;
   check('P2 M1 submitted with pending proposal', !!prop21 && prop21.status === 'pending', w21.s.body?.error);
 
-  section('Guardrail: forged release');
+  section('Guardrail: forged capture');
   const before = ppTotal();
   const gt = await call('POST', '/api/agent/guardrail-test', { milestone_id: p2m1 });
-  check('forged release = NO_APPROVAL, 0 PayPal calls', gt.status === 200 && gt.body.result.error === 'NO_APPROVAL' && /^prop_forged_/.test(gt.body.proposal_id) && ppTotal() === before && calls.payout.length === capBefore, gt.body);
+  check('forged capture = NO_APPROVAL, 0 PayPal calls', gt.status === 200 && gt.body.result.error === 'NO_APPROVAL' && /^prop_forged_/.test(gt.body.proposal_id) && ppTotal() === before && calls.capture.length === capBefore, gt.body);
   const run = await call('POST', '/api/agent/run', { event: 'proposal.approved', milestone_id: p2m1 });
-  check('agent run proposal.approved on a PENDING (unapproved) proposal pays nothing out', run.status === 200 && calls.payout.length === capBefore, { s: run.status, c: calls.payout.length });
-  check('forged-release activity logged', (await view(P2.pid)).activity.some((a) => /Guardrail test/.test(a.text)));
+  check('agent run proposal.approved on a PENDING (unapproved) proposal captures nothing', run.status === 200 && calls.capture.length === capBefore, { s: run.status, c: calls.capture.length });
+  check('forged-capture activity logged', (await view(P2.pid)).activity.some((a) => /Guardrail test/.test(a.text)));
 
-  const oldCancel = await asC('POST', `/api/proposals/${prop21.id}/cancel`, {});
-  check('the client cannot cancel alone: the old cancel route is gone, money still held', oldCancel.status === 404 && ms(await view(P2.pid), 'M1').status === 'submitted' && calls.refund.length === 0, oldCancel.status);
-  const rq = await call('POST', `/api/milestones/${p2m1}/refund-request`);
-  const rqId = rq.body.refund_request?.id;
-  check('client asks for a refund -> pending, nothing moves', rq.status === 201 && rq.body.refund_request.status === 'pending' && rq.body.milestone.status === 'submitted' && calls.refund.length === 0, rq.body);
-  const selfAccept = await asC('POST', `/api/proposals/${rqId}/accept-refund`, {});
-  check('client accepting their own request = 403 WRONG_ROLE, no refund', selfAccept.status === 403 && selfAccept.body.error === 'WRONG_ROLE' && calls.refund.length === 0, selfAccept.body);
-  const dec = await asF('POST', `/api/proposals/${rqId}/decline-refund`, {});
-  check('freelancer declines -> money stays held', dec.status === 200 && dec.body.refund_request.status === 'declined' && ms(await view(P2.pid), 'M1').payment.status === 'HELD' && calls.refund.length === 0, dec.body);
-  const rq2 = await call('POST', `/api/milestones/${p2m1}/refund-request`);
-  const cancel = await asF('POST', `/api/proposals/${rq2.body.refund_request?.id}/accept-refund`, {});
-  check('freelancer accepts -> REFUNDED, milestone cancelled, 1 refund call', cancel.status === 200 && cancel.body.payment.status === 'REFUNDED' && cancel.body.milestone.status === 'voided' && calls.refund.length === 1 && calls.refund[0] === `CAP-${f21.o.body.order_id}`, cancel.body);
-  const cancel2 = await asF('POST', `/api/proposals/${rq2.body.refund_request?.id}/accept-refund`, {});
-  check('second accept = same result, still 1 refund', cancel2.status === 200 && calls.refund.length === 1, cancel2.body);
-  check('nothing was paid out on P2', calls.payout.length === capBefore);
+  const cancel = await call('POST', `/api/proposals/${prop21.id}/cancel`, { party: 'client' });
+  check('cancel -> VOIDED, milestone voided, 1 void call', cancel.status === 200 && cancel.body.payment.status === 'VOIDED' && cancel.body.milestone.status === 'voided' && calls.void.length === 1 && calls.void[0] === `AUTH-${f21.o.body.order_id}`, cancel.body);
+  const cancel2 = await call('POST', `/api/proposals/${prop21.id}/cancel`, { party: 'client' });
+  check('second cancel = same result, still 1 void', cancel2.status === 200 && calls.void.length === 1, cancel2.body);
+  check('client never captured on P2', calls.capture.length === capBefore);
   v = await view(P2.pid);
-  check('P2 ledger has REFUNDED, no CAPTURED', v.ledger.some((l) => l.event === 'REFUNDED') && !v.ledger.some((l) => l.event === 'CAPTURED'));
+  check('P2 ledger has VOIDED, no CAPTURED', v.ledger.some((l) => l.event === 'VOIDED') && !v.ledger.some((l) => l.event === 'CAPTURED'));
   const stopped = (await call('GET', '/api/projects')).body;
   check('P2 status = stopped; later milestone cannot be funded', stopped.projects.find((p) => p.id === P2.pid).status === 'stopped' && (await call('POST', `/api/milestones/${ms(v, 'M2').id}/order`)).status === 409);
-  check('dashboard held = 0 after the refund; paid unchanged ($1000)', stopped.totals.held_minor === 0 && stopped.totals.paid_minor === 100000, stopped.totals);
+  check('dashboard held = 0 after void; paid unchanged ($1000)', stopped.totals.held_minor === 0 && stopped.totals.paid_minor === 100000, stopped.totals);
 
   // =========================================================================
   section('Agent forced fallback (model throws)');
@@ -346,12 +333,12 @@ try {
   const w31 = await submitWork(p3m1);
   const runS = w31.s.body.agent_run;
   check('model failure on submit -> run mode=fallback, proposal still created', w31.s.status === 200 && runS?.mode === 'fallback' && /model_error/.test(runS.fallback_reason || '') && w31.s.body.proposal?.status === 'pending', { mode: runS?.mode, why: runS?.fallback_reason });
-  const capB = calls.payout.length;
+  const capB = calls.capture.length;
   const ap31 = await call('POST', `/api/proposals/${w31.s.body.proposal.id}/approve`, { party: 'client' });
-  check('fallback still pays out exactly once on approve', ap31.status === 200 && ap31.body.agent_run.mode === 'fallback' && ap31.body.payment.status === 'CAPTURED' && calls.payout.length === capB + 1, ap31.body?.error);
+  check('fallback still captures exactly once on approve', ap31.status === 200 && ap31.body.agent_run.mode === 'fallback' && ap31.body.payment.status === 'CAPTURED' && calls.capture.length === capB + 1, ap31.body?.error);
   if (realModel) agentOpts.model = realModel; else delete agentOpts.model;
   const ff = await call('POST', '/api/agent/run', { event: 'milestone.submitted', milestone_id: p3m1, forceFallback: true });
-  check('POST /agent/run forceFallback -> fallback, no new proposal needed, no payout', ff.status === 200 && ff.body.agent_run.mode === 'fallback' && calls.payout.length === capB + 1, ff.body);
+  check('POST /agent/run forceFallback -> fallback, no new proposal needed, no capture', ff.status === 200 && ff.body.agent_run.mode === 'fallback' && calls.capture.length === capB + 1, ff.body);
 
   // =========================================================================
   section('Untrusted text never reaches the agent');
@@ -378,7 +365,7 @@ try {
     const probe = async (m, u, b) => { const r = await asS(m, u, b); if (r.status !== 404) leaks.push(`${m} ${u} -> ${r.status}`); };
     for (const id of ids.projects) { await probe('GET', `/api/projects/${id}`); await probe('POST', `/api/projects/${id}/refresh`); await probe('POST', `/api/projects/${id}/invites`); await probe('POST', `/api/projects/${id}/change-requests`, { message: 'leak probe text' }); }
     for (const id of ids.milestones) { await probe('POST', `/api/milestones/${id}/order`); await probe('POST', `/api/milestones/${id}/submit`); await probe('POST', '/api/agent/run', { event: 'milestone.submitted', milestone_id: id }); }
-    for (const id of ids.proposals) { await probe('POST', `/api/proposals/${id}/approve`, {}); await probe('POST', `/api/proposals/${id}/accept-refund`, {}); await probe('POST', `/api/proposals/${id}/decline-refund`, {}); }
+    for (const id of ids.proposals) { await probe('POST', `/api/proposals/${id}/approve`, {}); await probe('POST', `/api/proposals/${id}/cancel`, {}); }
     for (const id of ids.deliverables) await probe('GET', `/api/deliverables/${id}/download`);
     for (const id of ids.change_requests) await probe('POST', `/api/change-requests/${id}/decide`, { accept: true });
     const sDash = await asS('GET', '/api/projects');
@@ -389,7 +376,7 @@ try {
   // =========================================================================
   section('Totals and PayPal call counts');
   console.log('PayPal stub calls:', JSON.stringify(Object.fromEntries(Object.entries(calls).map(([k, a]) => [k, a.length]))));
-  check('exact PayPal write counts: 6 orders (P1x4 + P2 + P3), 6 funding captures, 5 payouts, 1 refund', calls.order.length === 6 && calls.fund.length === 6 && calls.payout.length === 5 && calls.refund.length === 1 && calls.other.length === 0, Object.fromEntries(Object.entries(calls).map(([k, a]) => [k, a.length])));
+  check('exact PayPal write counts: 6 orders (P1x4 + P2 + P3), 6 authorizes, 5 captures, 1 void', calls.order.length === 6 && calls.authorize.length === 6 && calls.capture.length === 5 && calls.void.length === 1 && calls.other.length === 0, Object.fromEntries(Object.entries(calls).map(([k, a]) => [k, a.length])));
   const ai = await call('GET', '/api/ai-runs');
   const byTask = {};
   for (const r of ai.body.runs) byTask[r.task] = (byTask[r.task] || 0) + 1;

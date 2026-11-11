@@ -18,19 +18,17 @@ Source: the wireframe's `HOOD{}` plus its action functions, with SPEC.md taking 
 | From | To | Triggered by |
 | --- | --- | --- |
 | `draft` | `agreed` | both parties approve the same agreement hash |
-| `agreed` | `authorized` | `POST /milestones/:id/authorize` succeeds (current milestone only). The client is charged here; `authorized` means funded and held by Milestone Pay |
+| `agreed` | `authorized` | `POST /milestones/:id/authorize` succeeds (current milestone only) |
 | `authorized` | `submitted` | `POST /milestones/:id/submit` |
 | `revision_requested` | `submitted` | `POST /milestones/:id/submit` after a re-upload |
 | `submitted` | `revision_requested` | `POST /milestones/:id/revision` |
-| `submitted` | `paid` | `release_payment` with a `release` proposal approved by the client |
-| `authorized`, `submitted`, `revision_requested` | `voided` | `refund_payment` with a `refund` proposal the client asked for and the freelancer approved. `voided` means cancelled |
+| `submitted` | `paid` | `capture_authorization` with an approved `release` proposal |
+| `authorized`, `submitted`, `revision_requested` | `voided` | `void_authorization` with an approved `void` proposal |
 | `paid` | `refunded` | `create_refund` (gated; not in the UI for the MVP) |
 
 Every other move throws. An accepted change order inserts a new milestone directly in `agreed`; that is a creation, not a transition.
 
 **Current milestone** = the lowest-`seq` milestone whose status is not `paid`. Only the current milestone can be funded, submitted or reviewed. If the current milestone is `voided`, the project is stopped and nothing later can be funded.
-
-**Hold (2026-11-11, owner decision):** funding captures the payment straight away, so the money sits on the Milestone Pay PayPal account with no expiry. It leaves the hold in two ways only: the client approves the work (payout to the freelancer), or the client asks for a refund and the freelancer accepts it (refund to the client). Nothing ends a hold automatically and the client cannot cancel alone. Payments funded before this change are PayPal authorizations (`payment.status: AUTHORIZED`, with `expires_at`); they are still captured on approval, voided on an accepted refund, and are the only payments `refresh` can move to `voided` when PayPal reports them expired.
 
 ## Objects
 
@@ -41,10 +39,8 @@ Every other move throws. An accepted change order inserts a new milestone direct
   "criteria":["Mockup for each of the 4 pages"], "rev_count":0, "rev_limit":2 /* null until gap g1 is fixed */,
   "rev_note":null, "is_current":true, "fundable":true,
   "start_day":0, "end_day":3,                      // timeline bars, days from project start
-  "payment": { "order_id":"5O…", "capture_id":"3C6…", "refund_id":null, "authorization_id":null, "expires_at":null,
-               "status":"HELD" /* CREATED | HELD (charged at funding, held by Milestone Pay) | CAPTURED (released to the
-                                  freelancer) | REFUNDED | older payments only: AUTHORIZED, VOIDED */ } | null,
-  "refund_request": { "id":"prop_x", "action":"refund", "status":"pending|approved|declined", "requested_by":"client" } | null,
+  "payment": { "order_id":"5O…", "authorization_id":"0VF…", "expires_at":"…", "capture_id":null,
+               "status":"AUTHORIZED" /* CREATED|AUTHORIZED|CAPTURED|VOIDED|REFUNDED */ } | null,
   "deliverables":[ /* current version only */
     { "id":"dlv_x", "version":1, "filename":"mockup-home.png", "size":123, "mime":"image/png",
       "sha256":"…", "download_url":"/api/deliverables/dlv_x/download" } ],
@@ -54,14 +50,14 @@ Every other move throws. An accepted change order inserts a new milestone direct
 { "id":"act_x", "at":"…", "project_id":"prj_x", "who":"ai|pp|agent|client|free|sys", "text":"…" }
 // Ledger row (totals are computed from these, never stored)
 { "id":"led_x", "at":"…", "project_id":"prj_x", "milestone_id":"ms_x", "label":"M1",
-  "event":"HELD|CAPTURED|PAID_OUT|REFUNDED (older payments: AUTHORIZED|VOIDED)", "paypal_id":"…", "amount_minor":240000 }
+  "event":"AUTHORIZED|CAPTURED|VOIDED|REFUNDED", "paypal_id":"…", "amount_minor":240000 }
 // Notification (fixed templates, no model)
 { "id":"ntf_x", "at":"…", "project_id":"prj_x", "to":"client|freelancer", "text":"M1 is paid. Fund M2 Build website (3,200 THB) so Ploy can start." }
 // Agent run
-{ "id":"run_x", "event":"milestone.submitted|proposal.approved|proposal.refund_accepted", "milestone_id":"ms_x",
+{ "id":"run_x", "event":"milestone.submitted|proposal.approved|proposal.voided", "milestone_id":"ms_x",
   "mode":"model|fallback", "steps":[ { "tool":"get_order", "args":{…}, "result":{…}, "ok":true } ], "at":"…" }
 // Proposal
-{ "id":"prop_x", "milestone_id":"ms_x", "action":"release|refund", "status":"pending|approved|executed|withdrawn|declined",
+{ "id":"prop_x", "milestone_id":"ms_x", "action":"release|void", "status":"pending|approved|executed|withdrawn",
   "reason":"…", "approved_by":"client"|null, "created_at":"…" }
 ```
 
@@ -76,8 +72,8 @@ Every other move throws. An accepted change order inserts a new milestone direct
 ### Step 1: Dashboard
 - Project `status` (computed, never stored): `draft` (no freelancer approval) · `sent` (freelancer approved, client not yet) · `active` · `completed` (every milestone paid/refunded) · `stopped` (current milestone voided). Test Lab projects are hidden.
 - `GET /api/projects` → `200 { projects:[ { id, title, freelancer, client, total_minor, status, milestones:[{id,label,status}], open_change_request:{ id, from, status }|null } ], totals:{ held_minor, paid_minor, not_funded_minor } }`
-  - `held_minor` = the amount of every milestone whose latest ledger event is `HELD` (or `AUTHORIZED` for older payments).
-  - `paid_minor` = `CAPTURED` minus any `REFUNDED` of a payment that had been released. Refunding a payment that was only held changes `held_minor`, not `paid_minor`.
+  - `held_minor` = the amount of every milestone whose latest ledger event is `AUTHORIZED`.
+  - `paid_minor` = `CAPTURED` minus `REFUNDED`.
   - `not_funded_minor` = the amount of milestones in `draft` or `agreed`.
   - The badge shows when `open_change_request.from === "client"` and `status === "open"`.
 
@@ -120,9 +116,9 @@ Every other move throws. An accepted change order inserts a new milestone direct
   - Creates a PayPal order with `intent: "AUTHORIZE"`, `custom_id = milestone id`, the amount from the db, and `PayPal-Request-Id: order-<milestone id>-<attempt>`.
   - Idempotent: if a CREATED order already exists for this milestone, it returns that order.
   - Errors: `409 NOT_CURRENT` (not the current milestone, or status ≠ `agreed`), `409 AGREEMENT_NOT_APPROVED`, `502 PAYPAL_ERROR { paypal_debug_id }`.
-- `POST /api/milestones/:id/authorize` `{ order_id }` → `200 { milestone, payment:{ order_id, capture_id, status:"HELD", expires_at:null } }`.
-  - The order is created with `intent: CAPTURE`; this call captures it (`POST /v2/checkout/orders/:id/capture`, `PayPal-Request-Id: ordcap-<order_id>`), so the client is charged now. Stores the capture id, runs `transition(→authorized)`, and writes ledger row `HELD` and an activity row. (The path keeps its old name.)
-  - Errors: `409 ORDER_MISMATCH`, `409 NOT_CURRENT`, `502 PAYPAL_ERROR`. A repeat call after success returns the same payment (no second capture).
+- `POST /api/milestones/:id/authorize` `{ order_id }` → `200 { milestone, payment:{ order_id, authorization_id, status:"AUTHORIZED", expires_at } }`.
+  - Sends `PayPal-Request-Id: auth-<order_id>`. Stores the payment, runs `transition(→authorized)`, and writes ledger row `AUTHORIZED` and an activity row.
+  - Errors: `409 ORDER_MISMATCH`, `409 NOT_CURRENT`, `502 PAYPAL_ERROR`. A repeat call after success returns the same payment (no second authorization).
 
 ### Step 6: Submit work
 - `POST /api/milestones/:id/deliverables` multipart `files[]` (`.pdf .png .jpg .jpeg .zip .mp4`, 20 MB each, extension + magic bytes) → `201 { deliverables:[…], version }`.
@@ -136,20 +132,16 @@ Every other move throws. An accepted change order inserts a new milestone direct
 - `GET /api/deliverables/:id/download` (`?inline=1` to view in the browser) streams the file from `./uploads`. It sets `Content-Disposition` and the stored mime type, and refuses path traversal. Never a static folder.
 - `POST /api/agent/run` `{ event, milestone_id }` → `200 { agent_run }`. Manual re-run and debugging. The event is one of the three names above.
 - `POST /api/proposals/:id/approve` `{ party:"client" }` → `200 { proposal, milestone, payment:{ capture_id, status:"CAPTURED" }, agent_run, next:{ milestone_id, label, title, amount_minor }|null }`.
-  - Sets proposal `approved`, then fires `proposal.approved`. The agent runs `release_payment` (gated) and `notify` (freelancer: paid; client: fund the next milestone).
-  - `release_payment` makes no capture call (the money was captured at funding): it marks the payment `CAPTURED`, adds ledger row `CAPTURED` with the capture id, withdraws any pending refund request and sends the payout. Older `AUTHORIZED` payments are captured first (`PayPal-Request-Id: cap-<authorization_id>`).
-  - Errors: `409 PROPOSAL_NOT_PENDING`; repeat approvals never release or pay out twice.
+  - Sets proposal `approved`, then fires `proposal.approved`. The agent runs `capture_authorization` (gated) and `notify` (freelancer: paid; client: fund the next milestone).
+  - Sends `PayPal-Request-Id: cap-<authorization_id>`. Adds ledger row `CAPTURED` with the capture id.
+  - Errors: `409 PROPOSAL_NOT_PENDING`; repeat approvals never capture twice.
 - `POST /api/milestones/:id/revision` `{ note, items?:string[] }` → `200 { milestone }`.
   - Status becomes `revision_requested`, `rev_count+1`, `rev_note` stored (≤1000 chars). The pending proposal becomes `withdrawn`; the hold stays.
   - Errors: `400 NOTE_TOO_SHORT` (<5 chars after trim), `409 REVISION_LIMIT` (`rev_limit` set and `rev_count >= rev_limit`).
   - **The note is never passed to the agent.**
-- Refund of a held payment. The money leaves the hold early only when the client asks **and** the freelancer accepts. (`POST /api/proposals/:id/cancel` is removed: the client cannot cancel alone.)
-  - `POST /api/milestones/:id/refund-request` (client; body ignored) → `201 { milestone, refund_request }`. Allowed in `authorized`, `submitted`, `revision_requested`, else `409 NOT_HELD`. Inserts a `refund` proposal `pending` (`requested_by:"client"`); a repeat returns the open one. No money moves and the status does not change.
-  - `POST /api/proposals/:id/withdraw-refund` (client) → `200 { milestone, refund_request }` (`withdrawn`).
-  - `POST /api/proposals/:id/decline-refund` (freelancer) → `200 { milestone, refund_request }` (`declined`). The money stays held; the client may ask again.
-  - `POST /api/proposals/:id/accept-refund` (freelancer) → `200 { milestone, payment:{ status:"REFUNDED", refund_id, … }, agent_run }`. Sets the proposal `approved` (`approved_by:"freelancer"`), then fires `proposal.refund_accepted`; the agent runs `refund_payment` (gated: client request + freelancer approval, else `NO_APPROVAL`) with `PayPal-Request-Id: ref-<capture_id>`, moves the milestone to `voided`, adds ledger row `REFUNDED` with the refund id and notifies both. An older `AUTHORIZED` payment is voided instead (`VOIDED`). `502 PAYPAL_ERROR` changes nothing and the same call retries.
-  - Errors: `409 PROPOSAL_NOT_PENDING` (not a refund request, or already answered), `403 WRONG_ROLE`.
-- `POST /api/agent/guardrail-test` `{ milestone_id }` → `200 { result:{ error:"NO_APPROVAL" }, proposal_id:"prop_forged_…", trace:"…" }`. Calls the real `release_payment` executor with a forged proposal id. It never calls PayPal.
+- `POST /api/proposals/:id/cancel` `{ party:"client" }` → `200 { milestone, payment:{ status:"VOIDED" }, agent_run }`.
+  - Withdraws the release proposal and inserts a `void` proposal already `approved` by the client. Fires `proposal.voided`; the agent runs `void_authorization` (gated) with `PayPal-Request-Id: void-<authorization_id>`. Adds ledger row `VOIDED`.
+- `POST /api/agent/guardrail-test` `{ milestone_id }` → `200 { result:{ error:"NO_APPROVAL" }, proposal_id:"prop_forged_…", trace:"…" }`. Calls the real `capture_authorization` executor with a forged proposal id. It never calls PayPal.
 
 ### Step 8: Scope creep (one open request per project)
 - `POST /api/projects/:id/change-requests` `{ message, from:"client"|"freelancer" }` → `201 { change_request }`.
@@ -170,7 +162,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 
 ### Step 9: Project page
 - `GET /api/projects/:id` → `200 { project, agreement, approvals, messages, milestones, ledger, activity, notifications, agent_runs, change_requests, ai_cost:{ calls, cost_usd } }`
-- `POST /api/projects/:id/refresh` → `200 { payments:[ { milestone_id, order_status, authorization_status, capture_status } ] }`. Uses toolkit `get_order` per payment; the db is updated only to match PayPal and goes through `transition()`. It never ends a hold on a payment captured at funding; it can mark a funding capture the db missed as `HELD`, and retries a failed payout.
+- `POST /api/projects/:id/refresh` → `200 { payments:[ { milestone_id, order_status, authorization_status, capture_status } ] }`. Uses toolkit `get_order` per payment; the db is updated only to match PayPal and goes through `transition()`.
 
 ### AI accounting
 - `GET /api/ai-runs?date=YYYY-MM-DD` → `200 { runs:[ { at, task, model, input_tokens, output_tokens, cost_usd, latency_ms, fallback } ], total_cost_usd }`
@@ -183,7 +175,7 @@ Every other move throws. An accepted change order inserts a new milestone direct
 - The model gets one response (`MAX_STEPS = 1` in agent.js) and emits all tool calls at once, executed in order; code completes any skipped notify/money step. Multi-step fails on `@ai-sdk/google@1` ("Function call is missing a thought_signature").
 - Agent run rows also carry `model, input_tokens, output_tokens, cost_usd, summary, fallback_reason`.
 - `get_order` uses `paypal.getOrder` (REST, same auth as the toolkit).
-- Notifications are fixed templates chosen by name (`paid_freelancer`, `fund_next_client`, `refunded_both`, `review_client`, `problem_freelancer`) and refused unless the state matches.
+- Notifications are fixed templates chosen by name (`paid_freelancer`, `fund_next_client`, `voided_both`, `review_client`, `problem_freelancer`) and refused unless the state matches.
 
 ## Internal module interfaces
 
@@ -201,9 +193,7 @@ activity(projectId, who, text): void; ledgerAdd(row): void; notify(projectId, to
 toolkit                                                          // PayPalAgentToolkit, whitelist orders.get + payments.createRefund/getRefunds
 toMoney(amount_minor, currency): {currency_code, value}          // the only satang → string conversion
 createAuthOrder(milestone, attempt): Promise<{id,status,links}>
-createCaptureOrder(milestone, attempt): Promise<{id, status}>   // intent CAPTURE
-captureOrder(orderId): Promise<{capture_id, status}>           // charges the client at funding
-authorizeOrder(orderId): Promise<{authorization_id, status, expires_at}>   // older flow, Test Lab only
+authorizeOrder(orderId): Promise<{authorization_id, status, expires_at}>
 captureAuth(authId): Promise<{id, status}>
 voidAuth(authId): Promise<{status}>
 refundCapture(captureId, amount_minor?): Promise<{id, status}>
@@ -219,7 +209,7 @@ withFallback(task, fn): Promise<any>                            // in models.js 
 
 // agent.js
 runAgent(event, milestoneId, {forceFallback?}): Promise<AgentRun>
-tools: { get_order, propose_release, release_payment, refund_payment, notify }
+tools: { get_order, propose_release, capture_authorization, void_authorization, notify }
 ```
 
 ## Design-system journey (2026-11-09)
@@ -247,10 +237,10 @@ Owner decision: the copy says the money is **held by Milestone Pay** (PayPal is 
 - Project chat: opens when the client asks for a revision (the note becomes the first message). `POST /api/projects/:id/chat` `{ text }` (1–1000) → `201 { message:{id,from,kind,text,at}, chat }`; `409 CHAT_NOT_OPEN` before that. `GET /api/projects/:id` returns `chat: [...] | null`. Untrusted text: never sent to the agent or a model.
 - Profiles: `user.avatar_url` on `/api/me` and `/api/session`. `POST /api/me/avatar` (multipart field `avatar`, .jpg/.png checked by magic bytes, ≤ 400 KB; the browser shrinks it to 256 px) → `{ user }`; `DELETE /api/me/avatar`. `GET /api/users/:id/avatar` and `GET /api/users/:id` → `{ profile:{id, display_name, roles, skills, bio, client_type, hire_for, avatar_url, member_since} }`, only for yourself or someone you share a project with (else `404`). Never the email. `members[]` on the project adds `user_id, avatar_url`. Clients can set `bio` too.
 - Account deletion: `DELETE /api/me` → `{ ok, scheduled_for, days: 15 }`. Logs the user out everywhere and erases the data after 15 days (`purgeDueAccounts`, run at start and hourly). Logging in before then cancels it (`/auth/paypal/callback` redirects with `?login=restored`; test-login returns `restored: true`). Still `409 ACTIVE_HOLDS` with money on hold; an account that gains a hold during the wait is erased once it settles.
-- Payout: after a release the agent calls `paypal.createPayout` (Payouts API, `sender_batch_id = payout-<capture_id>`) to send the amount to the freelancer's PayPal email. Same gate as the release (paid milestone + executed release proposal). `milestone.payment` adds `payout_status` (`SENT` | `FAILED` | null) and `payout_batch_id`; the ledger adds a `PAID_OUT` row. A failed payout never undoes the capture and is retried by `POST /api/projects/:id/refresh`.
+- Payout: after a capture the agent calls `paypal.createPayout` (Payouts API, `sender_batch_id = payout-<capture_id>`) to send the amount to the freelancer's PayPal email. Same gate as capture (paid milestone + executed release proposal). `milestone.payment` adds `payout_status` (`SENT` | `FAILED` | null) and `payout_batch_id`; the ledger adds a `PAID_OUT` row. A failed payout never undoes the capture and is retried by `POST /api/projects/:id/refresh`.
 
 ## Invoices (2026-11-10)
-One invoice per milestone, issued automatically when its payment has gone the whole way: funded by the client, approved by the client **and** paid out to the freelancer (`payout_status: SENT`). Not before, and never for a cancelled milestone.
+One invoice per milestone, issued automatically when its payment has gone the whole way: funded by the client, approved by the client, captured, **and** paid out to the freelancer (`payout_status: SENT`). Not before, and never for a cancelled milestone.
 
 - `milestone.invoice` → `{ number, issued_at, url } | null` on every milestone view. `number` is `INV-<yyyymmdd>-<last 8 of the capture id>`.
 - `GET /api/milestones/:id/invoice` → the invoice as one self-contained HTML page (prints to a single page; "Print or save as PDF" button). `?download=1` sends it as a file (`<number>.html`). Either member of the project; others get `404`. `409 INVOICE_NOT_READY` until it is issued.

@@ -3,7 +3,7 @@ import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, pageHead, alertBox, errBox, loading, skeleton, toast, confirmDialog,
   money, moneyEl, fmtNum, parseMinor, major, fmtDate, fmtDay, fmtTime, fmtDateTime, fmtSize, plural, initial,
   badge, msBadge, where, projectBadge, AGREEMENT_BADGE, nextStep, emptyState, stat, progress, msCard, fileRow, copyText,
-  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil, titleOf, editableTitle, chatCard, memberOf, invoiceLinks, wasRefunded,
+  poll, stopPoll, names, planBase, curOf, sandboxNote, daysUntil, titleOf, editableTitle, chatCard, memberOf, invoiceLinks,
 } from './core.js';
 import { projectOverview } from './project.js';
 
@@ -497,9 +497,7 @@ function drawSubmit(d, m, keep = false) {
   else if (m.status === 'paid') head = m.payment?.payout_status === 'FAILED'
     ? alertBox('warn', 'clock', el('b', {}, `${cname} approved ${m.label}. `), `${money(m.amount_minor, cur)} is released, but sending it to your PayPal hasn’t gone through yet. Open the project page and press “Check with PayPal” to try again.`)
     : alertBox('success', 'check', `${m.label} paid · `, el('b', {}, `${money(m.amount_minor, cur)}`), m.payment?.payout_status === 'SENT' ? ' sent to your PayPal.' : ' received.');
-  else if (m.status === 'voided') head = wasRefunded(m)
-    ? alertBox('issue', 'x', el('b', {}, `${m.label} was cancelled. `), `You accepted ${cname}’s refund request, so ${money(m.amount_minor, cur)} went back to ${cname}.`)
-    : alertBox('issue', 'x', el('b', {}, `${m.label} was cancelled. `), `The ${money(m.amount_minor, cur)} hold was released and ${cname} wasn’t charged.`);
+  else if (m.status === 'voided') head = alertBox('issue', 'x', el('b', {}, `${cname} cancelled ${m.label}. `), `The ${money(m.amount_minor, cur)} hold was cancelled and ${cname} wasn’t charged.`);
   else head = null;
   const notFunded = m.status === 'agreed' || m.status === 'draft';
   const body = notFunded
@@ -524,8 +522,7 @@ function drawSubmit(d, m, keep = false) {
     back(`/p/${pid}`, titleOf(d)),
     strip(d, m, `/p/${pid}/m`),
     el('div', { class: 'mp-stack', style: 'gap:6px' }, el('h1', { class: 'mp-t-title' }, `${m.label} · ${m.title}`),
-      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by Milestone Pay`) : null)),
-    refundAnswer(d, m, (x) => { const mm = x.milestones.find((y) => y.id === m.id); if (mm) drawSubmit(x, mm); }),
+      el('div', { class: 'mp-row mp-row--wrap mp-t-sm mp-muted' }, msBadge(m), ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? el('span', { class: 'mp-row' }, icon('lock'), `${money(m.amount_minor, cur)} held by Milestone Pay${m.payment?.expires_at ? ` until ${fmtDay(m.payment.expires_at)}` : ''}`) : null)),
     holdWarning(m, cur, cname, 'freelancer'),
     revising ? el('div', { class: 'mp-stack' }, badge('issue', 'alert', `Changes requested · round ${m.rev_count}${m.rev_limit ? ` of ${m.rev_limit}` : ''}`),
       alertBox('issue', 'flag', el('b', {}, `${cname} asked for changes`), el('div', {}, `“${m.rev_note || ''}”`))) : null,
@@ -533,36 +530,7 @@ function drawSubmit(d, m, keep = false) {
     revising || m.rev_count > 0 ? chatCard(d, 'freelancer', (x) => { const mm = x.milestones.find((y) => y.id === m.id); if (mm) drawSubmit(x, mm, true); }) : null,
     d.milestones.every((x) => x.status === 'paid') ? emptyState({ ic: 'check', title: 'All milestones paid', text: `Everything is delivered and paid. Files stay on the project page for both of you.`, actions: [link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary' }, 'Open project page')] }) : null));
 }
-/**
- * The client asked for a refund of a held payment. Only the freelancer can answer: accepting cancels the milestone
- * and sends the money back; declining keeps it held.
- */
-export function refundAnswer(d, m, redraw) {
-  const rq = m.refund_request;
-  if (!rq || !['pending', 'approved'].includes(rq.status) || !['authorized', 'submitted', 'revision_requested'].includes(m.status)) return null;
-  const cur = curOf(d); const { cname } = names(d); const pid = d.project.id; const amt = money(m.amount_minor, cur);
-  const later = d.milestones.filter((x) => x.seq > m.seq).map((x) => x.label);
-  const send = async (path, done) => {
-    Pj.busy = true;
-    try { await api(`/api/proposals/${rq.id}/${path}`, { body: {} }); toast(done, 'check'); }
-    catch (e) { toast(e.message, 'alert'); }
-    Pj.busy = false;
-    redraw(await api(`/api/projects/${pid}`).catch(() => d));
-  };
-  const accept = el('button', { class: 'mp-btn mp-btn--danger mp-btn--sm', id: 'refundAccept', disabled: Pj.busy, onclick: async () => {
-    const ok = await confirmDialog({ icon: 'undo', iconKind: 'issue', title: `Refund ${amt} to ${cname}?`,
-      text: `${m.label} is cancelled and ${amt} goes back to ${cname}’s PayPal. You won’t be paid for ${m.label}${later.length ? `, and ${later.join(' and ')} won’t start` : ''}. This can’t be undone.`,
-      rows: [['Milestone', `${m.label} · ${m.title}`], [`${cname} gets back`, amt], ['You receive', money(0, cur)]], confirm: `Refund ${amt}`, confirmClass: 'mp-btn--danger', cancel: 'Go back' });
-    if (ok) send('accept-refund', `${m.label} cancelled. ${amt} refunded to ${cname}.`);
-  } }, rq.status === 'approved' ? 'Try the refund again' : 'Accept refund');
-  const decline = rq.status === 'pending' ? el('button', { class: 'mp-btn mp-btn--secondary mp-btn--sm', id: 'refundDecline', disabled: Pj.busy,
-    onclick: () => send('decline-refund', `Refund declined. ${amt} stays held by Milestone Pay.`) }, 'Decline') : null;
-  return el('div', { id: 'refundBox' }, alertBox('warn', 'undo', el('b', {}, rq.status === 'approved' ? 'The refund didn’t go through yet. ' : `${cname} asked for a refund of ${m.label}. `),
-    rq.status === 'approved' ? `${amt} is still held by Milestone Pay.` : `Accept to cancel ${m.label} and send ${amt} back to ${cname}. Decline to keep it held by Milestone Pay and carry on.`,
-    el('div', { class: 'mp-row mp-row--wrap', style: 'margin-top:8px' }, accept, decline)));
-}
-/** “Hold ends in 3 days” warning for both sides (board 05). Only for holds made before payments were charged at
- *  funding: those are PayPal authorizations with an expiry. A payment charged at funding has none. */
+/** “Hold ends in 3 days” warning for both sides (board 05). */
 export function holdWarning(m, cur, other, me) {
   const left = m.payment?.expires_at && ['authorized', 'submitted', 'revision_requested'].includes(m.status) ? daysUntil(m.payment.expires_at) : null;
   if (left == null || left > 3) return null;

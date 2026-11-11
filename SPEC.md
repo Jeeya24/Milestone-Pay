@@ -248,14 +248,6 @@ Milestone Pay **never holds money**. The client authorizes the current milestone
 
 **Hold window:** PayPal honors an authorization for 3 days and it can last up to 29 days with reauthorization (which issues a new authorization id). Capture depends on the funds still being available. The day-1 demo captures within minutes; add reauthorize and expiry warnings before real use.
 
-**Update 2026-11-11 (owner decision): the hold never ends on its own.** A PayPal authorization lapses after 29 days whatever the milestone's due date is, so funding now captures the payment (`intent: CAPTURE`) and the money sits on the Milestone Pay PayPal account with no expiry. This replaces steps 1, 4 and 5 above and the hold window:
-
-- **Fund:** the client is charged when they confirm in the PayPal popup → `authorized` (funded and held). The UI says "You're charged now".
-- **Approve & pay:** no second capture. The agent's `release_payment` marks the payment released and sends the payout to the freelancer.
-- **Refund:** the client can only *ask* for a refund of a held milestone. The money goes back (`refund_payment`, a refund of the capture) only when the freelancer accepts; the milestone is then cancelled (`voided`) and later milestones do not start. If the freelancer declines, the money stays held. The client can no longer cancel alone.
-- **Costs accepted:** PayPal keeps its fee when a capture is refunded, and a capture can be refunded for 180 days.
-- Holds funded before this change are still authorizations and keep their expiry; see `docs/api.md`.
-
 **S1 spike first:** authorize → capture, authorize → void and a refund, all in THB. If THB fails, use USD in the API and keep showing THB in the UI. If authorize itself misbehaves, fall back to toolkit `create_order` (CAPTURE) at fund time and `pay_order` after approval, but that loses the "PayPal holds it" story.
 
 **Production note for the pitch:** to support many freelancers, each one would connect their PayPal account through PayPal's partner onboarding so Milestone Pay can act on their behalf. The platform still never holds funds.

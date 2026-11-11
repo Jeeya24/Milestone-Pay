@@ -59,10 +59,7 @@ test('stranger gets 404 on every route family', async () => {
     ['GET', `/api/deliverables/${j.dlv}/download`],
     ['POST', `/api/milestones/${j.m1}/revision`, { note: 'please change' }],
     ['POST', `/api/proposals/${j.proposal.id}/approve`, {}],
-    ['POST', `/api/milestones/${j.m1}/refund-request`, {}],
-    ['POST', `/api/proposals/${j.proposal.id}/accept-refund`, {}],
-    ['POST', `/api/proposals/${j.proposal.id}/decline-refund`, {}],
-    ['POST', `/api/proposals/${j.proposal.id}/withdraw-refund`, {}],
+    ['POST', `/api/proposals/${j.proposal.id}/cancel`, {}],
     ['POST', `/api/projects/${j.pid}/change-requests`, { message: 'add a page please' }],
     ['POST', `/api/projects/${j.pid}/refresh`],
     ['POST', '/api/agent/run', { event: 'milestone.submitted', milestone_id: j.m1 }],
@@ -72,8 +69,7 @@ test('stranger gets 404 on every route family', async () => {
     const r = await S.call(method, url, body);
     assert.equal(r.status, 404, `${method} ${url} -> ${r.status} ${JSON.stringify(r.body)}`);
   }
-  assert.equal(db.load().milestones.find((m) => m.id === j.m1).status, 'submitted');
-  assert.equal(pp.calls.refund.length, 0);
+  assert.equal(pp.calls.capture.length, 0);
 });
 
 test('role matrix: wrong role gets 403 WRONG_ROLE', async () => {
@@ -82,10 +78,7 @@ test('role matrix: wrong role gets 403 WRONG_ROLE', async () => {
     [C, 'POST', `/api/milestones/${j.m1}/submit`],
     [C, 'POST', `/api/projects/${j.pid}/extract`],
     [F, 'POST', `/api/proposals/${j.proposal.id}/approve`, {}],
-    [F, 'POST', `/api/milestones/${j.m1}/refund-request`, {}],
-    [F, 'POST', `/api/proposals/${j.proposal.id}/withdraw-refund`, {}],
-    [C, 'POST', `/api/proposals/${j.proposal.id}/accept-refund`, {}],
-    [C, 'POST', `/api/proposals/${j.proposal.id}/decline-refund`, {}],
+    [F, 'POST', `/api/proposals/${j.proposal.id}/cancel`, {}],
     [F, 'POST', `/api/milestones/${j.m1}/revision`, { note: 'please change' }],
     [F, 'POST', `/api/milestones/${j.m2}/order`],
   ];
@@ -94,8 +87,7 @@ test('role matrix: wrong role gets 403 WRONG_ROLE', async () => {
     assert.equal(r.status, 403, `${who.user.name} ${method} ${url} -> ${r.status}`);
     assert.equal(r.body.error, 'WRONG_ROLE');
   }
-  assert.equal(db.load().milestones.find((m) => m.id === j.m1).status, 'submitted');
-  assert.equal(pp.calls.refund.length, 0);
+  assert.equal(pp.calls.capture.length, 0);
 });
 
 test('party in body is ignored: the session decides the role', async () => {
@@ -135,8 +127,7 @@ test('X-Act-As: client is ignored on non-demo projects', async () => {
   const j = await journey();
   const r = await F.call('POST', `/api/proposals/${j.proposal.id}/approve`, {}, { 'x-act-as': 'client' });
   assert.equal(r.status, 403);
-  assert.equal(db.load().milestones.find((m) => m.id === j.m1).status, 'submitted');
-  assert.equal(pp.calls.refund.length, 0);
+  assert.equal(pp.calls.capture.length, 0);
 });
 
 test('authorize with an order made for another milestone -> 409 ORDER_MISMATCH', async () => {
@@ -154,20 +145,19 @@ test('approvals, payments and proposals record who acted', async () => {
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const prop = db.load().proposals.find((p) => p.id === j.proposal.id);
   assert.equal(prop.approved_by_user, C.user.id);
-  assert.equal(pp.calls.fund.length, 1);
-  assert.equal(db.load().milestones.find((m) => m.id === j.m1).status, 'paid');
+  assert.equal(pp.calls.capture.length, 1);
 });
 
-test('release refused when the approval was not made by the client member', async () => {
+test('capture refused when the approval was not made by the client member', async () => {
   const realAgent = await import('../../agent.js');
   const j = await journey();
   const prop = db.load().proposals.find((p) => p.id === j.proposal.id);
   Object.assign(prop, { status: 'approved', approved_by: 'client', approved_by_user: F.user.id }); // forged
   db.save();
-  const direct = await realAgent.releaseExecutor({ milestone_id: j.m1, proposal_id: prop.id }, { paypal: pp });
+  const direct = await realAgent.captureExecutor({ milestone_id: j.m1, proposal_id: prop.id }, { paypal: pp });
   assert.equal(direct.error, 'NO_APPROVAL');
   await realAgent.runAgent('proposal.approved', j.m1, { paypal: pp, forceFallback: true });
-  assert.equal(db.load().payments.find((p) => p.milestone_id === j.m1).status, 'HELD');
+  assert.equal(pp.calls.capture.length, 0);
   assert.equal(db.load().milestones.find((m) => m.id === j.m1).status, 'submitted');
 });
 

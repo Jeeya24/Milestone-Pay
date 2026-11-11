@@ -1,5 +1,5 @@
 // Fix list of 2026-11-10: archive and delete projects, project chat on revisions, profile pictures and
-// public profiles, and sending a released payment on to the freelancer's PayPal.
+// public profiles, and sending a captured payment on to the freelancer's PayPal.
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -174,7 +174,7 @@ test('public profile: bio and skills for the other person on a shared project, n
   assert.equal((await C.call('GET', '/api/users/usr_nope')).status, 404);
 });
 
-test('after the client approves, the held payment is sent on to the freelancer once', async () => {
+test('after the client approves, the captured payment is sent on to the freelancer once', async () => {
   await app.close();
   const payouts = [];
   await boot({ createPayout: async (a) => { payouts.push(a); return { batch_id: `BATCH-${payouts.length}`, status: 'PENDING' }; } });
@@ -191,7 +191,7 @@ test('after the client approves, the held payment is sent on to the freelancer o
   const cap = ok.body.payment.capture_id;
   assert.deepEqual(payouts[0], { batchId: `payout-${cap}`, email: 'ploy@test.local', amount_minor: m.amount_minor, cur: 'USD', note: `${m.label} ${m.title}` });
   const d = (await F.call('GET', `/api/projects/${p.pid}`)).body;
-  assert.deepEqual(d.ledger.map((l) => l.event), ['HELD', 'CAPTURED', 'PAID_OUT']);
+  assert.deepEqual(d.ledger.map((l) => l.event), ['AUTHORIZED', 'CAPTURED', 'PAID_OUT']);
   assert.equal(d.ledger[2].paypal_id, 'BATCH-1');
   assert.equal(d.milestones[0].payment.payout_status, 'SENT');
   // repeat approve, refresh and a direct call never pay twice
@@ -213,7 +213,7 @@ test('a failed payout keeps the milestone paid and is retried from refresh', asy
   assert.equal(ok.status, 200);
   assert.equal(ok.body.milestone.status, 'paid');
   assert.equal(ok.body.milestone.payment.payout_status, 'FAILED');
-  assert.deepEqual(db.load().ledger.map((l) => l.event), ['HELD', 'CAPTURED']);
+  assert.deepEqual(db.load().ledger.map((l) => l.event), ['AUTHORIZED', 'CAPTURED']);
   fail = false;
   await F.call('POST', `/api/projects/${p.pid}/refresh`);
   assert.equal(sent.length, 1);

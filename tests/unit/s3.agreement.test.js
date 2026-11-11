@@ -215,7 +215,7 @@ test('GET /projects totals come from the ledger; GET /projects/:id has the full 
   const d = db.load();
   const [m1, m2] = d.milestones.filter((m) => m.project_id === pid).sort((a, b) => a.seq - b.seq);
   db.transition(m1, 'authorized'); db.transition(m1, 'submitted'); db.transition(m1, 'paid');
-  db.ledgerAdd({ project_id: pid, milestone_id: m1.id, label: 'M1', event: 'HELD', amount_minor: m1.amount_minor });
+  db.ledgerAdd({ project_id: pid, milestone_id: m1.id, label: 'M1', event: 'AUTHORIZED', amount_minor: m1.amount_minor });
   db.ledgerAdd({ project_id: pid, milestone_id: m1.id, label: 'M1', event: 'CAPTURED', amount_minor: m1.amount_minor });
   db.transition(m2, 'authorized');
   db.ledgerAdd({ project_id: pid, milestone_id: m2.id, label: 'M2', event: 'AUTHORIZED', amount_minor: m2.amount_minor });

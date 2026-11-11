@@ -2,13 +2,13 @@
 import {
   S, el, icon, api, go, link, back, mount, mountKeep, appShell, alertBox, errBox, toast, money, moneyEl, fmtDay, fmtDateTime, fmtDate,
   badge, msBadge, nextStep, stat, progress, msCard, fileRow, poll, names, planBase, curOf, dueOf, plural, emptyState,
-  titleOf, editableTitle, chatCard, personChip, memberOf, wasRefunded,
+  titleOf, editableTitle, chatCard, personChip, memberOf,
 } from './core.js';
 import { inviteBox, inviteUrlFor, holdWarning } from './freelancer.js';
 
 const HELD = ['authorized', 'submitted', 'revision_requested'];
 const LEDGER = {
-  HELD: ['held', 'lock', 'Held by Milestone Pay'], AUTHORIZED: ['held', 'lock', 'Held by Milestone Pay'], CAPTURED: ['released', 'check', 'Released by the client'], PAID_OUT: ['released', 'banknote', 'Sent to PayPal'], VOIDED: ['refunded', 'undo', 'Cancelled · not charged'], REFUNDED: ['refunded', 'undo', 'Refunded to the client'],
+  AUTHORIZED: ['held', 'lock', 'Held by Milestone Pay'], CAPTURED: ['released', 'check', 'Released by the client'], PAID_OUT: ['released', 'banknote', 'Sent to PayPal'], VOIDED: ['refunded', 'undo', 'Cancelled · not charged'], REFUNDED: ['refunded', 'undo', 'Refunded'],
 };
 const P = { refreshed: null, refreshing: false, refreshErr: null, guard: null, pid: null, open: new Map(), timeline: null };
 
@@ -25,11 +25,7 @@ export function nextFor(d, role) {
   if (role === 'freelancer' && crOpen) return { ic: 'chat', text: `${cname} requested a change`, sub: 'Check it against the agreement before you reply.', btn: 'Review request', to: `/p/${pid}/changes` };
   const m = d.milestones.find((x) => x.is_current);
   if (!m) return { ic: 'check', text: 'Everything is paid', sub: 'Files and the payment history stay here for both of you.' };
-  if (m.status === 'voided') return { ic: 'x', text: `${m.label} was cancelled`, sub: wasRefunded(m) ? (role === 'client' ? `${money(m.amount_minor, cur)} was refunded to your PayPal. Later milestones won’t start.` : `${money(m.amount_minor, cur)} was refunded to ${cname}. Later milestones won’t start.`)
-    : role === 'client' ? 'You weren’t charged for it. Later milestones won’t start.' : `${cname} wasn’t charged. Later milestones won’t start.` };
-  if (m.refund_request?.status === 'pending' && HELD.includes(m.status)) return role === 'client'
-    ? { ic: 'clock', text: `Waiting for ${fname} to answer your refund request`, sub: `${money(m.amount_minor, cur)} for ${m.label} stays held by Milestone Pay until then.`, btn: `Open ${m.label}`, to: `/p/${pid}/m/${m.id}` }
-    : { ic: 'undo', text: `${cname} asked for a refund of ${m.label}`, sub: `Accept to send ${money(m.amount_minor, cur)} back, or decline to keep it held.`, btn: 'Answer the request', to: `/p/${pid}/m/${m.id}` };
+  if (m.status === 'voided') return { ic: 'x', text: `${m.label} was cancelled`, sub: role === 'client' ? 'You weren’t charged for it. Later milestones won’t start.' : `${cname} wasn’t charged. Later milestones won’t start.` };
   if (role === 'client') {
     if (m.status === 'agreed') return { text: `Fund ${m.label} so ${fname} can start`, sub: `${money(m.amount_minor, cur)} · Milestone Pay holds it until you approve the work.`, btn: `Fund ${m.label}`, to: `/p/${pid}` };
     if (m.status === 'submitted') return { ic: 'eye', text: `${fname} delivered ${m.label} · ${m.title}`, sub: `Open the files. If you’re happy, pay ${fname} ${money(m.amount_minor, cur)}.`, btn: `Review ${m.label}`, to: `/p/${pid}/m/${m.id}` };
@@ -194,8 +190,8 @@ function draw(d, role, keep = false) {
         link(`/p/${pid}/agreement`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('file'), 'Agreement'),
         role === 'freelancer' ? link(`/p/${pid}/changes`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('chat'), 'Change requests') : link(`/p/${pid}/change`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('chat'), 'Your requests'),
         role === 'freelancer' ? link(`/p/${pid}/activity`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('inbox'), 'Activity') : link(`/p/${pid}`, { class: 'mp-btn mp-btn--secondary mp-btn--sm' }, icon('banknote'), 'Payments'))),
-    voided ? (role === 'client' ? alertBox('info', 'info', el('b', {}, `${voided.label} was cancelled. `), `${wasRefunded(voided) ? `${money(voided.amount_minor, cur)} was refunded to your PayPal.` : 'You weren’t charged for it.'}${paid ? ` ${fname} keeps the ${money(paid, cur)} already paid.` : ''}`)
-      : alertBox('issue', 'x', el('b', {}, `${voided.label} was cancelled. `), `${wasRefunded(voided) ? `${money(voided.amount_minor, cur)} was refunded to ${cname}.` : `The ${money(voided.amount_minor, cur)} hold was released and ${cname} wasn’t charged.`} Later milestones won’t start.${paid ? ` ${money(paid, cur)} stays paid.` : ''}`)) : null,
+    voided ? (role === 'client' ? alertBox('info', 'info', el('b', {}, `You cancelled ${voided.label}. `), `You weren’t charged for it.${paid ? ` ${fname} keeps the ${money(paid, cur)} already paid.` : ''}`)
+      : alertBox('issue', 'x', el('b', {}, `${cname} cancelled ${voided.label}. `), `The ${money(voided.amount_minor, cur)} hold was cancelled and ${cname} wasn’t charged. Later milestones won’t start.${paid ? ` ${money(paid, cur)} stays paid.` : ''}`)) : null,
     el('div', { class: 'mp-statrow' },
       el('div', { class: 'mp-stat' }, progress(ms)),
       stat('lock', 'Held by Milestone Pay', held, cur),

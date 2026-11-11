@@ -145,14 +145,11 @@ export function msBadge(m, short = false) {
   const [k, ic, t] = STATUS[key] || STATUS.draft;
   return badge(k, ic, short && key === 'submitted' ? 'Submitted' : t);
 }
-/** A cancelled milestone whose payment was refunded. (Holds made before payments were charged at funding were
- *  PayPal authorizations: cancelling those released the hold and the client was never charged.) */
-export const wasRefunded = (m) => m.payment?.status === 'REFUNDED';
 /** Where the money is, for one milestone. */
 export function where(m, fname) {
   if (['authorized', 'submitted', 'revision_requested'].includes(m.status)) return el('span', { class: 'mp-where mp-where--held' }, icon('lock'), 'Held by Milestone Pay');
   if (m.status === 'paid') return el('span', { class: 'mp-where mp-where--released' }, icon('check'), `Paid to ${fname || 'the freelancer'}`);
-  if (m.status === 'voided') return el('span', { class: 'mp-where mp-where--refunded' }, icon('undo'), wasRefunded(m) ? 'Cancelled · refunded' : 'Cancelled · not charged');
+  if (m.status === 'voided') return el('span', { class: 'mp-where mp-where--refunded' }, icon('undo'), 'Cancelled · not charged');
   if (m.status === 'refunded') return el('span', { class: 'mp-where mp-where--refunded' }, icon('undo'), 'Refunded');
   return el('span', { class: 'mp-where mp-where--none' }, icon('circle-dashed'), 'Not funded yet');
 }

@@ -1,13 +1,12 @@
-// PayPal sandbox smoke for the money flow: fund = capture the order (the client is charged, Milestone Pay holds it),
-// then refund one of the two held captures. Checks that a funded order carries a capture and no authorization
-// (so nothing can expire).
+// PayPal sandbox smoke: order->authorize->capture, order->authorize->void, capture->refund.
 // Usage: node scripts/smoke.js   (USD by default; API_CURRENCY=THB to override)
 //        node scripts/smoke.js --fund   (against a running server at BASE_URL, default http://localhost:3000:
 //        funds the current milestone of the newest non-lab project; a human approves the PayPal popup URL)
 // Prints ids only; never prints credentials or auth headers.
 import 'dotenv/config';
 import crypto from 'node:crypto';
-import { toMoney, currency, createCaptureOrder, captureOrder, refundCapture, getOrder, _call } from '../paypal.js';
+import { toMoney, currency, createAuthOrder, authorizeOrder, captureAuth, voidAuth,
+  refundCapture, getOrder, _call } from '../paypal.js';
 
 const POLL_MS = 5000, TIMEOUT_MS = 10 * 60 * 1000;
 const rid = () => `ms_smoke_${crypto.randomBytes(5).toString('hex')}`;
@@ -16,13 +15,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const ids = {};
 let path = 'url';
 
-// ---- test-only helper: card-funded CAPTURE order (PayPal published sandbox test card). With a card attached PayPal
-// captures as soon as the order is created. Production createCaptureOrder never carries card fields.
+// ---- test-only helper: card-funded AUTHORIZE order (PayPal published sandbox test card).
+// Production createAuthOrder never carries card fields.
 async function testCardOrder(m) {
   return _call('POST', '/v2/checkout/orders', {
     requestId: `order-${m.id}-card`,
     body: {
-      intent: 'CAPTURE',
+      intent: 'AUTHORIZE',
       purchase_units: [{ custom_id: m.id, amount: toMoney(m.amount_minor, currency()) }],
       payment_source: { card: { number: '4111111111111111', expiry: '2030-12', security_code: '123', name: 'Smoke Test' } },
     },
@@ -40,7 +39,7 @@ async function makeOrder(m, tryCard) {
         JSON.stringify((e.details || []).map((d) => d.issue)));
     }
   }
-  const o = await createCaptureOrder(m, 1);
+  const o = await createAuthOrder(m, 1);
   const approve = (o.links || []).find((l) => l.rel === 'payer-action' || l.rel === 'approve');
   log(`APPROVE: ${approve?.href}   (order ${o.id}, ${m.id})`);
   return { order: o, card: false };
@@ -79,7 +78,7 @@ async function fund() {
   log('Waiting for approval (polls every 5s, up to 10 min)...');
   await waitApproved(orderId);
   const auth = await api('POST', `/api/milestones/${m.id}/authorize`, { order_id: orderId });
-  log('capture_id', auth.payment.capture_id, 'status', auth.payment.status, 'expires_at', auth.payment.expires_at);
+  log('authorization_id', auth.payment.authorization_id, 'status', auth.payment.status);
   const after = await api('GET', `/api/projects/${view.project.id}`);
   log('ledger row', JSON.stringify(after.ledger.filter((l) => l.milestone_id === m.id).pop()));
   log('FUND PASS');
@@ -89,10 +88,8 @@ async function main() {
   if (process.argv.includes('--fund')) return fund();
   const cur = currency();
   log(`currency=${cur}`);
-  const m1 = { id: rid(), title: 'Smoke fund and hold', amount_minor: 15000 };
-  // Not 99.00: the sandbox refuses to refund a card capture of exactly that amount (REFUND_NOT_ALLOWED), while
-  // 98.00 and 150.00 refund fine.
-  const m2 = { id: rid(), title: 'Smoke fund and refund', amount_minor: 9800 };
+  const m1 = { id: rid(), title: 'Smoke capture', amount_minor: 15000 };
+  const m2 = { id: rid(), title: 'Smoke void', amount_minor: 9900 };
 
   const r1 = await makeOrder(m1, true);
   path = r1.card ? 'card' : 'url';
@@ -102,51 +99,33 @@ async function main() {
   if (!r1.card) await waitApproved(r1.order.id);
   if (!r2.card) await waitApproved(r2.order.id);
 
-  /** Fund: capture the order. A card order is already captured by PayPal when it is created. */
-  const fundOrder = async (r) => {
-    if (!r.card) {
-      const c = await captureOrder(r.order.id);
-      const again = await captureOrder(r.order.id); // same PayPal-Request-Id: the same capture, never a second charge
-      if (again.capture_id !== c.capture_id) throw new Error('funding capture not idempotent');
-      return c;
-    }
-    const c = r.order.purchase_units?.[0]?.payments?.captures?.[0];
-    if (!c) throw new Error(`card order ${r.order.id} has no capture (status ${r.order.status})`);
-    return { capture_id: c.id, status: c.status };
-  };
-  /** A held payment is a completed capture with no authorization, so there is nothing that can expire. */
-  const assertHeld = async (orderId, captureId) => {
-    const o = await getOrder(orderId);
-    const pay = o.purchase_units?.[0]?.payments || {};
-    const cap = (pay.captures || []).find((x) => x.id === captureId);
-    if (o.status !== 'COMPLETED' || cap?.status !== 'COMPLETED') throw new Error(`order ${orderId} not held: order=${o.status} capture=${cap?.status}`);
-    if ((pay.authorizations || []).length) throw new Error(`order ${orderId} still has an authorization`);
-    return o;
-  };
+  // Flow 1: authorize -> capture
+  const a1 = await authorizeOrder(r1.order.id);
+  log('flow1 authorized', a1);
+  if (a1.status !== 'CREATED') throw new Error(`unexpected auth status ${a1.status}`);
+  ids.auth1 = a1.authorization_id;
+  const c1 = await captureAuth(a1.authorization_id);
+  log('flow1 captured', c1);
+  if (c1.status !== 'COMPLETED') throw new Error(`capture status ${c1.status}`);
+  ids.capture = c1.id;
+  // idempotent repeat returns the same capture
+  const c1b = await captureAuth(a1.authorization_id);
+  if (c1b.id !== c1.id) throw new Error('capture not idempotent');
 
-  // Flow 1: fund -> held (stays captured on the Milestone Pay account)
-  const c1 = await fundOrder(r1);
-  log('flow1 funded', c1);
-  if (c1.status !== 'COMPLETED') throw new Error(`funding capture status ${c1.status}`);
-  ids.capture1 = c1.capture_id;
-  await assertHeld(r1.order.id, c1.capture_id);
-  log('flow1 held: capture COMPLETED, no authorization, no expiry');
+  // Flow 2: authorize -> void
+  const a2 = await authorizeOrder(r2.order.id);
+  log('flow2 authorized', a2);
+  ids.auth2 = a2.authorization_id;
+  const v = await voidAuth(a2.authorization_id);
+  log('flow2 voided', v);
+  if (v.status !== 'VOIDED') throw new Error(`void status ${v.status}`);
+  ids.void = a2.authorization_id;
 
-  // Flow 2: fund -> refund (what an accepted refund request does)
-  const c2 = await fundOrder(r2);
-  log('flow2 funded', c2);
-  if (c2.status !== 'COMPLETED') throw new Error(`funding capture status ${c2.status}`);
-  ids.capture2 = c2.capture_id;
-  await assertHeld(r2.order.id, c2.capture_id);
-  const rf = await refundCapture(c2.capture_id);
-  log('flow2 refunded', rf);
+  // Flow 3: refund the capture from flow 1
+  const rf = await refundCapture(c1.id);
+  log('flow3 refunded', rf);
   if (!['COMPLETED', 'PENDING'].includes(rf.status)) throw new Error(`refund status ${rf.status}`);
   ids.refund = rf.id;
-  const rfb = await refundCapture(c2.capture_id); // idempotent repeat
-  if (rfb.id !== rf.id) throw new Error('refund not idempotent');
-  const cap2 = await _call('GET', `/v2/payments/captures/${c2.capture_id}`);
-  log('flow2 capture after refund', cap2.status);
-  if (!['REFUNDED', 'PARTIALLY_REFUNDED'].includes(cap2.status) && rf.status === 'COMPLETED') throw new Error(`capture ${c2.capture_id} is ${cap2.status} after the refund`);
 
   log('IDS', JSON.stringify(ids));
   log(`PATH=${ids.path} CURRENCY=${cur}`);
