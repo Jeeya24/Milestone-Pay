@@ -645,10 +645,10 @@ function drawChanges(d, keep = false) {
       : alertBox('success', 'check', el('b', {}, `${cname} accepted the change order. `), `${decided.sent_version?.label || ''} · ${decided.sent_version?.title || ''} (${money(decided.sent_version?.amount_minor || 0, cur)}) is now a new milestone, funded after the ones before it.`)) : null,
     openArea, idle,
     approved ? el('div', { class: 'mp-stack mp-stack--3', id: 'earlierRequests' }, el('h2', { class: 'mp-t-section' }, `Earlier requests${past.length ? ` · ${past.length}` : ''}`),
-      past.length ? el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table' }, el('thead', {}, el('tr', {}, el('th', {}, 'Request'), el('th', {}, 'From'), el('th', {}, 'When'), el('th', {}, 'AI check'), el('th', {}, 'Result'))),
-        el('tbody', {}, past.map((c) => { const k = KIND_BADGE[c.classification]; return el('tr', {}, el('td', { title: c.text }, c.sent_version?.title || (c.text.length > 70 ? `${c.text.slice(0, 70)}…` : c.text)), el('td', {}, c.from === 'client' ? cname : 'You'), el('td', {}, fmtDate(c.created_at)),
-          el('td', {}, k ? badge(k[0], k[1], k[2]) : ''),
-          el('td', {}, c.status === 'accepted' ? badge('success', 'check', 'Accepted') : c.status === 'declined' ? badge('neutral', 'x', 'Declined') : badge('neutral', 'check', 'Closed'))); }))))
+      past.length ? el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table mp-table--stack' }, el('thead', {}, el('tr', {}, el('th', {}, 'Request'), el('th', {}, 'From'), el('th', {}, 'When'), el('th', {}, 'AI check'), el('th', {}, 'Result'))),
+        el('tbody', {}, past.map((c) => { const k = KIND_BADGE[c.classification]; return el('tr', {}, el('td', { title: c.text, 'data-label': 'Request' }, c.sent_version?.title || (c.text.length > 70 ? `${c.text.slice(0, 70)}…` : c.text)), el('td', { 'data-label': 'From' }, c.from === 'client' ? cname : 'You'), el('td', { 'data-label': 'When' }, fmtDate(c.created_at)),
+          el('td', { 'data-label': 'AI check' }, k ? badge(k[0], k[1], k[2]) : ''),
+          el('td', { 'data-label': 'Result' }, c.status === 'accepted' ? badge('success', 'check', 'Accepted') : c.status === 'declined' ? badge('neutral', 'x', 'Declined') : badge('neutral', 'check', 'Closed'))); }))))
         : el('p', { class: 'mp-muted mp-t-sm' }, 'Requests you’ve dealt with, and how each one ended, will be listed here.')) : null,
     corner));
 }

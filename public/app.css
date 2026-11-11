@@ -247,3 +247,55 @@ button.mp-person:hover { background: var(--surface-sunken); }
   .mp-slim { flex-wrap: wrap; }
 }
 #sendQuote { white-space: normal; max-width: 100%; height: auto; padding-top: 10px; padding-bottom: 10px; text-align: left; }
+
+/* ------------------------------------------------------------------ phone pass: nothing wider than the screen, tap targets >= 40px */
+@media (max-width: 760px) {
+  .mp-ms__right { flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
+  .mp-ms__right .mp-badge { white-space: normal; text-align: left; max-width: 100%; }
+  .mp-badge { max-width: 100%; }
+  button.mp-chip { min-height: 40px; padding-left: 12px; padding-right: 12px; }
+  .mp-msx__toggle { min-height: 44px; }
+  .mp-iconbtn--sm { width: 44px; height: 44px; }
+  button.mp-back, a.mp-back { min-height: 44px; display: inline-flex; align-items: center; }
+  .mp-btn--sm { min-height: 40px; }
+  button.mp-person { min-height: 40px; }
+  .mp-tag { min-height: 40px; }
+}
+
+.mp-tl__st { color: var(--ink-muted); font-size: 12px; }
+.mp-tl__name { display: flex; flex-direction: column; min-width: 0; padding-right: var(--space-2); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  /* totals: two across instead of three tall cards */
+  .mp-statrow, .mp-grid-3:has(> .mp-stat) { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); }
+  .mp-statrow > :first-child, .mp-grid-3:has(> .mp-stat) > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .mp-stat { padding: var(--space-3) var(--space-4); min-width: 0; }
+  .mp-stat__value { font-size: 22px; line-height: 28px; }
+  /* client payments: what to do comes first, the summary after */
+  .mp-paypage__side { grid-row: auto; }
+  /* timeline: bars show the icon; the status is written under the name */
+  .mp-tl { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+  .mp-tl__txt { display: none; }
+  .mp-tl__bar { justify-content: center; padding: 0; min-width: 22px; }
+  .mp-tl__axis span:not(:first-child):not(:last-child) { display: none; }
+  /* settings rows: text above its button */
+  .mp-setrow { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+  .mp-setrow > .mp-btn, .mp-setrow > div > .mp-btn { align-self: flex-start; }
+  /* tables that read as cards on a phone */
+  .mp-table--stack thead { display: none; }
+  .mp-table--stack, .mp-table--stack tbody { display: block; }
+  .mp-table--stack tr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px var(--space-3); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); }
+  .mp-table--stack tr:first-child { border-top: 0; }
+  .mp-table--stack td { display: contents; }
+  .mp-table--stack td::before { content: attr(data-label); font-size: 12px; color: var(--ink-muted); }
+  .mp-table--stack td:first-child::before { display: none; }
+  .mp-table--stack td:first-child { display: block; grid-column: 1 / -1; padding: 0; border: 0; font-weight: 600; overflow-wrap: anywhere; }
+  /* room under the page for the floating corner button */
+  .mp-page:has(.mp-corner) { padding-bottom: 104px; }
+  .mp-corner--open { left: 16px; right: 16px; width: auto; max-width: none; }
+}
+
+@media (max-width: 760px) {
+  .mp-table--stack tr { justify-items: start; align-items: center; }
+  .mp-table--stack td[data-label=""]::before { display: none; }
+  .mp-table--stack td.num { text-align: left; }
+}

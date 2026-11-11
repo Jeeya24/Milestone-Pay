@@ -91,7 +91,7 @@ export function renderInvoiceHtml(v, { nonce = '' } = {}) {
   footer{margin-top:32px;padding-top:16px;border-top:1px solid #e4ddd0}
   .bar{max-width:760px;margin:24px auto -16px;display:flex;justify-content:flex-end;padding:0 4px}
   button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:1px solid #1c1a17;background:#1c1a17;color:#fff;cursor:pointer}
-  @media (max-width:600px){.sheet{margin:0;border:0;border-radius:0;padding:24px}.parties{grid-template-columns:1fr}.meta th{width:130px}}
+  @media (max-width:600px){.sheet{margin:0;border:0;border-radius:0;padding:24px 20px}.parties{grid-template-columns:1fr;gap:16px}.meta th{width:46%;padding-right:12px}.bar{margin:12px 16px;justify-content:stretch}.bar button{width:100%;min-height:44px}header{margin-bottom:24px}}
   @media print{body{background:#fff}.sheet{margin:0;border:0;max-width:none;padding:0}.bar{display:none}}
 </style>
 </head>

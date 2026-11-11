@@ -61,8 +61,8 @@ function timeline(d, role, allPaid) {
       const prevM = ms.filter((x) => x.seq < m.seq && x.status !== 'paid').pop();
       const [cls, ic, txt] = m.status === 'paid' ? ['paid', 'check', 'Paid'] : HELD.includes(m.status) ? ['held', 'lock', m.status === 'submitted' ? 'Submitted' : 'Funded · in progress']
         : m.status === 'voided' ? ['blocked', 'x', 'Cancelled'] : blocked ? ['blocked', 'clock', `Waits for ${prevM?.label || 'previous'}`] : ['blocked', 'circle-dashed', 'Not funded'];
-      return [el('span', { class: 'mp-t-sm' }, `${m.label} ${m.title}`),
-        el('div', { class: 'mp-tl__track' }, el('div', { class: `mp-tl__bar mp-tl__bar--${cls}`, style: `left:${(s / span) * 100}%;width:${Math.max(8, ((e - s) / span) * 100)}%`, title: `${m.label}: ${txt}` }, icon(ic), txt))];
+      return [el('span', { class: 'mp-t-sm mp-tl__name' }, `${m.label} ${m.title}`, el('span', { class: 'mp-tl__st mp-only-phone' }, txt)),
+        el('div', { class: 'mp-tl__track' }, el('div', { class: `mp-tl__bar mp-tl__bar--${cls}`, style: `left:${(s / span) * 100}%;width:${Math.max(8, ((e - s) / span) * 100)}%`, title: `${m.label}: ${txt}` }, icon(ic), el('span', { class: 'mp-tl__txt' }, txt)))];
     })));
 }
 

@@ -57,12 +57,12 @@ export async function viewJobs() {
         el('span', { class: 'mp-stat__value mp-num' }, String(ongoing.length), el('small', {}, 'ongoing')), el('span', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, `${past.length} past`))),
     ongoing.length ? el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, `Ongoing · ${ongoing.length}`), ongoing.map(row)) : null,
     past.length ? el('div', { class: 'mp-stack mp-stack--3' }, el('h2', { class: 'mp-t-section' }, `Past · ${past.length}`),
-      el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table' },
+      el('div', { class: 'mp-card mp-card--raised mp-card--flush mp-tablewrap' }, el('table', { class: 'mp-table mp-table--stack' },
         el('thead', {}, el('tr', {}, el('th', {}, 'Project'), el('th', {}, 'Status'), el('th', { class: 'num' }, 'Total'), el('th'))),
         el('tbody', {}, past.map((p) => el('tr', {}, el('td', {}, el('b', {}, p.title || 'Project'), el('div', { class: 'mp-t-caption mp-muted', style: 'font-weight:400' }, p.freelancer || '')),
-          el('td', {}, p.status === 'completed' ? badge('success', 'check', 'Completed') : badge('neutral', 'x', 'Cancelled')),
-          el('td', { class: 'num mp-num mp-strong' }, `${money(p.paid_minor, p.currency)} ${p.status === 'completed' ? 'paid' : 'paid'}`),
-          el('td', { style: 'width:1%' }, el('div', { class: 'mp-row', style: 'flex-wrap:nowrap;gap:0' }, link(`/p/${p.id}/project`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, 'View'), projectActions(p, viewJobs))))))))) : null,
+          el('td', { 'data-label': 'Status' }, p.status === 'completed' ? badge('success', 'check', 'Completed') : badge('neutral', 'x', 'Cancelled')),
+          el('td', { class: 'num mp-num mp-strong', 'data-label': 'Total' }, `${money(p.paid_minor, p.currency)} ${p.status === 'completed' ? 'paid' : 'paid'}`),
+          el('td', { style: 'width:1%', 'data-label': '' }, el('div', { class: 'mp-row', style: 'flex-wrap:nowrap;gap:0' }, link(`/p/${p.id}/project`, { class: 'mp-btn mp-btn--ghost mp-btn--sm' }, 'View'), projectActions(p, viewJobs))))))))) : null,
     archivedList(archived, row),
     sandboxNote()));
 }

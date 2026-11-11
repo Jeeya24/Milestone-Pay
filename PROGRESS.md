@@ -70,6 +70,10 @@
 - [x] 24 project page redesign (header links, copy-invite icon, slim next step, files inside milestone rows, timeline toggle, "you" wording)
 - Ran: `npm test`, `scripts/e2e.js`, `tests/qa/journey-ui.cjs`, `tests/qa/fixes-ui.cjs` (headless Chromium, no console errors). PayPal stubbed.
 
+## Phone pass, 2026-11-11
+- [x] `tests/qa/phone-ui.cjs`: 58 screens (both roles, every project state, dialogs, onboarding, invoice, landing) at 390px and 360px. Fails on sideways scroll, anything past the screen edge, tap targets under 36px, or a console error. 116/116.
+- Fixed: status badge overflow at 360px, small tap targets, three tall total cards (now two across), client payments (action before summary), timeline labels, request tables as cards, settings rows, invoice header, home link in the account menu, stray "null" in the skills picker.
+
 ## Status 2026-11-08
 All slices built and committed on branch `build/full-app`. `npm test` 110/110, `node scripts/e2e.js` 85/85 (PayPal stubbed), browser bug bash clean after fixes (reports/final.md).
 **Still needs a human:** one real sandbox run through the PayPal popup (authorize → submit → approve & pay → capture id; cancel → void) and a look at the ids in the sandbox dashboard. Gate 2 and the "ledger ids match PayPal" DoD item stay open until then.

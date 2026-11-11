@@ -259,7 +259,7 @@ export function tagPicker(options, selected, { onChange, allowAdd = false, addLa
       onclick: () => { sel.has(t) ? sel.delete(t) : sel.add(t); draw(); changed(); },
     }, icon(sel.has(t) ? 'check' : 'plus'), t)),
     other ? el('button', { type: 'button', class: `mp-tag ${otherOpen ? 'on' : ''}`, 'aria-pressed': otherOpen ? 'true' : 'false', 'aria-expanded': otherOpen ? 'true' : 'false',
-      onclick: () => { otherOpen = !otherOpen; draw(); if (otherOpen) input.focus(); } }, icon(otherOpen ? 'check' : 'plus'), other) : null);
+      onclick: () => { otherOpen = !otherOpen; draw(); if (otherOpen) input.focus(); } }, icon(otherOpen ? 'check' : 'plus'), other) : '');
     addRow.hidden = !(allowAdd || otherOpen);
   }
   /** Picked tags, plus anything typed in the box but not added yet. */
@@ -309,6 +309,7 @@ export function topbar(role = homeRole()) {
     menu = el('div', { class: 'mp-menu', role: 'menu' },
       el('div', { class: 'mp-menu__who' }, avatar(myName(), pic, `mp-avatar--lg ${isClient ? '' : 'mp-avatar--me'}`),
         el('div', { class: 'mp-menu__id' }, el('b', { class: 'mp-t-sm', id: 'userName' }, myName()), el('div', { class: 'mp-t-caption mp-muted', title: S.me?.email || '' }, S.me?.email || ''))),
+      item(isClient ? 'briefcase' : 'laptop', isClient ? 'Hired projects' : 'Your projects', () => go(isClient ? '/jobs' : '/projects')),
       item(isClient ? 'building' : 'user', isClient ? 'Business details' : 'Profile', () => go('/settings')),
       item('banknote', 'PayPal', () => go('/settings#paypal'), el('small', { class: 'mp-ok' }, icon('check'), 'Connected')),
       roles.has(other) ? item(other === 'client' ? 'briefcase' : 'laptop', other === 'client' ? 'Switch to Hired projects' : 'Switch to Projects', () => switchRole(other))
