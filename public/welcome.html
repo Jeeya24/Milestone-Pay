@@ -107,8 +107,24 @@
   #statement .t-lead { margin-top: var(--s-6); }
   .statement__calls p { margin: var(--s-2) 0 0; }
   /* the name across the .wrap, hand-set for its 13 letters */
-  .close__word { font-size: clamp(48px, 12vw, 200px); line-height: 1.08; }
-  @media (max-width: 639px) { .close__word { font-size: clamp(32px, 13vw, 56px); } }
+  /* The closing block and the footer links: as tall as their content, never squeezed into one screen. On a short
+     window the fixed one-screen height made the big name slide over the link columns. */
+  footer#contact.closing { height: auto; min-height: 0; padding-bottom: var(--s-6); }
+  footer#contact.closing > .wrap { height: auto; display: flex; flex-direction: column; row-gap: var(--s-8); }
+  footer#contact .closing__cta { flex: none; gap: var(--s-5); }
+  footer#contact .closing__links { flex: none; }
+  /* A short window (a laptop with the browser not full height): every section is at least a screen and grows with
+     its content, so one section's last rows never land on the next section's heading. */
+  @media (min-width: 640px) and (max-height: 780px) {
+    main > section, main > section.hero { height: auto !important; min-height: 100svh; display: flex; flex-direction: column; }
+    main > section > .wrap { height: auto; flex: 1 0 auto; min-height: 0; }
+    main > section.g2 > .wrap, main > section.g2m > .wrap { grid-template-rows: auto auto; row-gap: var(--s-9); }
+    main > section > .wrap > *, main > section .group { min-height: auto; }
+    main > section .fill, main > section .group > .fill { flex: 1 0 auto; }
+    main > section.hero .hero__art { min-height: 320px; }
+  }
+  .close__word { margin-top: 0; font-size: clamp(40px, 11.5vw, 184px); line-height: 1; white-space: nowrap; overflow: hidden; padding-bottom: .12em; }
+  @media (max-width: 639px) { .close__word { font-size: clamp(30px, 12.5vw, 56px); } footer#contact.closing > .wrap { row-gap: var(--s-7); } }
   @media (max-width: 1023px) { #safeguards .ui-chat__ph { visibility: hidden; } }
   /* the steps at the tablet (not pinned there): the section keeps its two screens */
   @media (min-width: 640px) and (max-width: 1023px) { main > section#how[data-moment="pinned-chapters"]:not(.is-live) { height: 200svh; } }
