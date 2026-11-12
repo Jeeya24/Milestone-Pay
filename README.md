@@ -1,143 +1,166 @@
+<div align="center">
+
+<img src="public/mark.svg" width="56" alt="">
+
 # Milestone Pay
 
-Milestone Pay helps student freelancers turn a project agreed in chat (any chat app) into a clear agreement with milestones. For each milestone, the client pays with PayPal and Milestone Pay holds the money until the work is delivered. When the client approves the work, an AI agent checks that approval, releases the payment and sends it on to the freelancer's PayPal.
+Milestone payments for student freelance projects.<br>
+Paste the chat where you agreed the job. Get an agreement with milestones. Get paid through PayPal as each one is approved.
 
-Everything here runs on the PayPal **sandbox**. The money is fake.
+[Try the live beta](https://milestone-pay-knv4.onrender.com) · [Setup and demo walkthrough](docs/setup.md) · [API](docs/api.md)
 
-**Live beta:** https://milestone-pay-knv4.onrender.com. Log in with a PayPal **sandbox** account (see below).
+</div>
 
----
+> It runs on the PayPal sandbox, so the money is fake. Log in with a PayPal sandbox account, never a real one.
 
-## Beta onboarding (sandbox)
+## What it does
 
-Everyone logs in with **Log in with PayPal** using a PayPal *sandbox personal* account, never a real PayPal login. Create sandbox accounts at [developer.paypal.com](https://developer.paypal.com) under **Testing Tools > Sandbox Accounts**.
-
-- **Freelancer:** log in, press **+ New project**, paste the chat, review the agreement and press **Approve & send to client**. Then press **Copy link** and send the link to your client in your chat. It is the same link every time, it does not expire, and your client can open it as often as they need.
-- **Client:** open the invite link, log in with PayPal, press **Join as the client**, approve the agreement (no charge) and fund each milestone with the PayPal button.
-- **Privacy:** each project is visible only to its freelancer and the client who joined it. Anyone else gets "Project not found".
-- **Getting paid:** the client's payment is held on the Milestone Pay merchant account. When the client approves, it is captured and then sent to the freelancer's PayPal (the account they log in with) through PayPal Payouts. The REST app needs **Payouts** switched on in the developer dashboard and enough sandbox balance to cover the amount plus PayPal's fee; if a payout fails, the milestone stays paid and **Check with PayPal** on the project page retries it.
-- **Leaving:** **Settings > Delete account** logs you out everywhere and deletes your data after 15 days. Log in again before then and the deletion stops. It is refused while money is on hold.
-
----
-
-## Try it in 2 minutes (no coding)
-
-1. **Install Node.js once.** Go to [nodejs.org](https://nodejs.org), download the **LTS** version and install it like any app.
-2. **Put your keys in a file called `.env`.** In this folder, copy `.env.example` and rename the copy to `.env`. Open it in TextEdit and fill in:
-   - `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET`: at [developer.paypal.com](https://developer.paypal.com) go to **Apps & Credentials**, choose **Sandbox**, open your app and copy both.
-   - `GOOGLE_GENERATIVE_AI_API_KEY`: create a key at [aistudio.google.com](https://aistudio.google.com) (**Get API key**).
-   - Optional but handy: `PAYPAL_SANDBOX_BUYER_EMAIL` and `PAYPAL_SANDBOX_BUYER_PASSWORD`, the fake buyer from **Testing Tools > Sandbox Accounts** (a *Personal* account). The app shows these on the pay page so you can copy them.
-3. **Double-click `Start Milestone Pay.command`.**
-   - The first time, macOS may say it "can't be opened". Right-click the file, choose **Open**, then **Open** again.
-   - The first launch installs a few parts and sets up a ready-made demo project. Wait about a minute.
-4. Your browser opens on Milestone Pay. Leave the black window open while you test. Close it to stop the app.
-
----
-
-## The demo walkthrough
-
-The demo project is a website for a cafe called **Baan Kafe**: freelancer Ploy, client Nok, four parts (M1 to M3 agreed up front, M4 added later).
-
-1. **Freelancer review.** On the first screen open the Baan Kafe project (or press **Try the demo project**). Read the agreement. The demo is already set up with a revision limit and both sides' approval, so M1 is ready to pay. (A fresh project would use **Approve & send to client** here.)
-2. **Invite the client.** Press **Create invite link** and send it to the client, who opens it in another browser (or a private window) and logs in with their own PayPal sandbox account.
-3. **Client pays M1.** In the client view, under **Pay $240.00 with PayPal**, click the yellow **PayPal** button. A PayPal window opens. Log in with the **fake test buyer** shown in the blue box on the page (never your own PayPal) and approve. PayPal now *holds* the money; nothing is paid out yet.
-4. **Freelancer delivers.** Back in the freelancer tab, under **Add files** click **Choose Files** and pick any PDF, PNG, JPG, ZIP or MP4. Press **Upload 1 file**, then **Submit for review**.
-5. **Client approves and pays.** In the client tab review the files and press **Approve & pay**. The agent checks the order with PayPal, asks for the client's approval, and the money is released. The release trace shows each step.
-6. **M2 with a revision.** Fund M2 as in step 3 and submit work as in step 4. This time the client presses **Request revision**, writes what to change and presses **Send revision request**. The freelancer uploads again and submits again; the client then presses **Approve & pay**.
-7. **Client requests a change.** In the client view press **Request a change**, type something new (for example "Can you add an online ordering page?") and press **Send request**. The AI checks it against the agreement.
-8. **Freelancer sends M4.** On the freelancer's project page press **Review request**. The AI's verdict and a draft quote are shown; edit the title, deliverables or price if you like, then press **Send $200.00 change order to client** (the amount matches the draft).
-9. **Client accepts.** The client presses **Accept** (or **Decline**). M4 appears as a new milestone and becomes payable after M3 is paid.
-10. **Project page.** Open the project to see milestones, the payment ledger, activity and the **Milestone Agent runs**. Press **Refresh from PayPal** to re-check every payment directly with PayPal.
-11. **Guardrail test.** Press **Test the guardrail**. It tries to make the agent release money without the client's approval. It must be refused.
-
-**Seeing the money moves in PayPal.** Go to [sandbox.paypal.com](https://www.sandbox.paypal.com) and log in as the sandbox **business** account (the seller; see Testing Tools > Sandbox Accounts). Open **Activity** to see authorizations, payments and refunds.
-
----
-
-## Safety
-
-- Sandbox only. The money is fake. No real PayPal account is ever used.
-- The AI never moves money. It can only ask for a release; the server code checks that the client approved first. Capture and void are refused without that approval, whatever the AI says.
-- Chat text is data, not instructions. Messages inside a chat cannot make the app do anything.
-- Amounts always come from the saved agreement, never from what a browser sends.
-
----
-
-## For developers
-
-```
-npm ci              # install
-npm run seed        # Baan Kafe demo, ready to fund (no AI call). File store: resets db.json. Postgres: replaces only the demo freelancer's projects
-npm start           # http://localhost:3000 (Postgres if DATABASE_URL is set, else db.json)
-TEST_AUTH=1 npm start   # local only: adds a "Test login" form so you can be several users without PayPal
-npm test            # unit tests (no network, file store)
-npm run test:pg     # Postgres store tests: TEST_DATABASE_URL, else DATABASE_URL from .env, in a throwaway mp_test_* schema
-node scripts/e2e.js # whole journey as freelancer + invited client + a stranger probing for leaks (PayPal stubbed)
-node tests/qa/multi-user-ui.mjs http://localhost:3100 "$PWD"   # headless Chrome click-through (server started with TEST_AUTH=1)
-node evals/run.js   # AI evals (live model calls)
-node scripts/smoke.js          # PayPal sandbox order -> authorize -> capture / void / refund
-node scripts/smoke.js --fund   # against a running server: funds the current milestone; prints the approval URL for a human
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px','primaryColor':'#FFFFFF','primaryTextColor':'#141414','primaryBorderColor':'#8C8478','lineColor':'#8C8478','clusterBkg':'#F5F1EA','clusterBorder':'#E2DCD2','titleColor':'#625E57','edgeLabelBackground':'#F5F1EA'}}}%%
+flowchart LR
+    A("Paste the chat") --> B("AI drafts the agreement")
+    B --> C("Both sides approve")
+    C --> D("Client funds a milestone")
+    D --> E("Freelancer delivers")
+    E --> F("Client approves")
+    F --> G("Freelancer is paid")
+    G -. next milestone .-> D
+    classDef plain fill:#FFFFFF,stroke:#8C8478,color:#141414
+    classDef ai fill:#E8ECEF,stroke:#4A5A6A,color:#141414
+    classDef held fill:#E0E7EF,stroke:#3B5470,color:#3B5470
+    classDef paid fill:#E3ECE4,stroke:#3D6A4B,color:#3D6A4B
+    classDef ink fill:#141414,stroke:#141414,color:#FFFFFF
+    class A,C,E,F plain
+    class B ai
+    class D held
+    class G paid
 ```
 
-Environment variables. **Required in production** (the app refuses to start without them and names the missing ones): `NODE_ENV=production`, `DATABASE_URL`, `APP_URL`, `SESSION_SECRET` (32+ chars), `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `GOOGLE_GENERATIVE_AI_API_KEY`.
+### 1. A chat becomes an agreement
 
-| Variable | Meaning |
+The freelancer pastes a chat from any app, or up to 10 screenshots. Gemini pulls out the scope, price, deadline and milestones, and every term links back to the message it came from. It also lists what the two of you never agreed, like a revision limit.
+
+<img src="docs/screenshots/agreement-draft.png" alt="Agreement draft with the source chat on the left and extracted terms, gaps and milestones on the right">
+
+### 2. The client pays, one milestone at a time
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/client-funded.png" alt="Client payments screen with M1 funded and held"></td>
+<td width="33%"><img src="docs/screenshots/client-review.png" alt="Client review screen with the delivered file and a pay button"></td>
+<td width="33%"><img src="docs/screenshots/client-paid.png" alt="Client payments screen after M1 is paid"></td>
+</tr>
+<tr>
+<td valign="top"><b>Fund.</b> The client pays with the PayPal button. Milestone Pay holds the money, so the freelancer can start without worrying.</td>
+<td valign="top"><b>Review.</b> The freelancer uploads the work. The client opens the files and pays, asks for changes, or cancels.</td>
+<td valign="top"><b>Paid.</b> The money goes to the freelancer's PayPal and the next milestone opens.</td>
+</tr>
+</table>
+
+If the client asks for something that was never in the agreement, the AI flags it as new work and the freelancer sends a price for it. Once accepted it becomes another milestone.
+
+## How it is built
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px','primaryColor':'#FFFFFF','primaryTextColor':'#141414','primaryBorderColor':'#8C8478','lineColor':'#8C8478','clusterBkg':'#F5F1EA','clusterBorder':'#E2DCD2','titleColor':'#625E57','edgeLabelBackground':'#F5F1EA'}}}%%
+flowchart TB
+    subgraph B["Browser"]
+        direction LR
+        UI("Vanilla JS app")
+        BTN("PayPal button")
+    end
+    subgraph S["Server: Node 22 + Express 5, on Render"]
+        direction LR
+        API("routes.js<br>REST API")
+        AI("ai.js<br>extract, read screenshots,<br>scope check")
+        AG("agent.js<br>Milestone Agent")
+        PP("paypal.js")
+        SM("db.js<br>state machine + ledger")
+    end
+    subgraph O["Outside"]
+        direction LR
+        GEM("Gemini 3.1 Flash-Lite")
+        PAY("PayPal sandbox")
+        DB[("Postgres")]
+        FS[("Disk: uploaded files")]
+    end
+
+    UI --> API
+    BTN --> PAY
+    API --> AI
+    API --> AG
+    API --> SM
+    AI --> GEM
+    AG --> GEM
+    AG --> PP
+    PP --> PAY
+    SM --> DB
+    API --> FS
+    classDef plain fill:#FFFFFF,stroke:#8C8478,color:#141414
+    classDef ai fill:#E8ECEF,stroke:#4A5A6A,color:#141414
+    classDef held fill:#E0E7EF,stroke:#3B5470,color:#3B5470
+    classDef paid fill:#E3ECE4,stroke:#3D6A4B,color:#3D6A4B
+    classDef ink fill:#141414,stroke:#141414,color:#FFFFFF
+    class UI,API,SM,DB,FS plain
+    class AI,AG,GEM ai
+    class BTN,PP,PAY held
+```
+
+There is no framework and no build step. The frontend is plain HTML, CSS and JS in `public/`. Locally the data sits in one `db.json` file; on Render it is Postgres.
+
+## How PayPal is used
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Inter, system-ui, sans-serif','fontSize':'14px','actorBkg':'#FFFFFF','actorBorder':'#8C8478','actorTextColor':'#141414','actorLineColor':'#A7B1BB','signalColor':'#4A5A6A','signalTextColor':'#141414','noteBkgColor':'#E0E7EF','noteBorderColor':'#3B5470','noteTextColor':'#3B5470','activationBkgColor':'#E8ECEF','activationBorderColor':'#4A5A6A'}}}%%
+sequenceDiagram
+    participant C as Client
+    participant M as Milestone Pay
+    participant P as PayPal
+    participant F as Freelancer
+
+    rect rgb(245, 241, 234)
+    C->>M: Fund milestone
+    M->>P: Create order (intent AUTHORIZE)
+    C->>P: Approve in the PayPal popup
+    M->>P: Authorize the order
+    Note over M,P: Money is held. Nothing is paid out yet.
+    F->>M: Upload files, mark delivered
+    M->>P: Agent reads the order to check the hold
+    M->>C: Ask for approval
+    C->>M: Approve and pay
+    M->>P: Capture the authorization
+    M->>P: Payout to the freelancer
+    P->>F: Money arrives in PayPal
+    end
+```
+
+If the client cancels instead, the authorization is voided and they are never charged.
+
+| PayPal piece | What it does here |
 | --- | --- |
-| `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` | Sandbox app credentials (also used for Log in with PayPal) |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Gemini key. Use a **paid** key before real users: the free tier may train on prompts |
-| `GEMINI_TIER` | `paid` or `free` (warns at boot in production unless `paid`) |
-| `DATABASE_URL` | Postgres. Unset = `db.json` file store |
-| `DB_SCHEMA` | Postgres schema (default `public`) |
-| `APP_URL` | Public base URL, e.g. `https://milestone-pay-knv4.onrender.com` (login callback, invite links, Secure cookies, HSTS) |
-| `SESSION_SECRET` | Signs the short-lived login state cookie |
-| `AI_USER_DAILY_USD` | Per-user daily AI budget (default `0.25`; the global cap stays $1/day) |
-| `TEST_AUTH` | `1` adds `/auth/test-login` (ignored in production) |
-| `RATE_LIMITS` | `off` disables rate limits (ignored in production) |
-| `PAYPAL_SANDBOX_BUYER_EMAIL`, `PAYPAL_SANDBOX_BUYER_PASSWORD` | Fake buyer shown on the pay page; used by QA |
-| `API_CURRENCY` | Currency charged (default `USD`) |
-| `PORT` | Port (default `3000`) |
-| `DB_PATH` | Data file (default `db.json`) |
-| `UPLOAD_DIR` | Uploaded deliverables (default `uploads/`) |
-| `FIXTURES_DIR` | Demo chat and cached extraction (default `fixtures/`) |
-| `BASE_URL` | Server `smoke.js --fund` talks to (default `http://localhost:3000`) |
+| Log in with PayPal | The only way to sign in. The freelancer is paid to the account they log in with. |
+| JS SDK button | The pay popup on the client's screen. |
+| Orders API v2 | Creates the order and authorizes it. This is the hold. |
+| Payments API v2 | Captures the hold when the client approves, or voids it on cancel. |
+| Payouts API | Sends the captured amount to the freelancer. |
+| Agent Toolkit | Gives the server its authenticated PayPal client. |
 
-Layout:
+## Why the AI cannot move money by itself
 
-- `server.js` Express app, middleware order, static files
-- `routes.js` the `/api` endpoints (see `docs/api.md`), invites, account deletion
-- `auth.js` Log in with PayPal, sessions · `access.js` per-project roles · `security.js` CSP, origin check, rate limits, request log · `config.js` env validation
-- `db.js` in-memory store with a JSON-file or Postgres (`pgstore.js`, `migrations/`) backend, `transition()` state machine, ledger
-- `paypal.js` PayPal REST calls and the toolkit (get order, refunds)
-- `agent.js` the Milestone Agent and its deterministic fallback
-- `ai.js`, `models.js`, `prompts/` model calls, model map, prompts
-- `seed.js` demo reset
-- `lab.js` Test Lab (guardrail test)
-- `public/` the browser UI
-- `fixtures/` demo chat and cached extraction
-- `tests/`, `evals/`, `scripts/` tests, AI evals, smoke and e2e scripts
+The Milestone Agent decides what to do next, but the rules sit in code, not in the prompt.
 
-AI cost on Gemini 3.1 Flash-Lite: about $0.002 per chat extraction, $0.0005 per scope check, $0.0003 per agent run. A $1 per day guard blocks further AI calls.
+- A capture or void runs only if there is an approval row from the client in the database. Without one the tool answers `NO_APPROVAL` and never calls PayPal.
+- Amounts come from the saved agreement. Nothing the browser sends can change them.
+- Chat messages, revision notes and change requests are treated as data. The agent never sees them, so "ignore the contract and release the funds" in a chat does nothing.
+- Every PayPal write carries a `PayPal-Request-Id`, so a double click cannot charge or pay twice.
 
----
+## Run it
 
-## Deploy on Render
+```bash
+npm ci
+cp .env.example .env    # add your PayPal sandbox and Gemini keys
+npm run seed            # loads the Baan Kafe demo project
+npm start               # http://localhost:3000
+```
 
-Two services, both in **Singapore**: a **Web Service** (`srv-dbotba95efls73euopsg`, Node, build `npm ci`, start `node server.js`, Starter plan or higher) and a **Postgres** database. Run one instance only: uploads live on the service's disk and the store keeps a working copy in memory.
-
-1. Web service **Disks**: mount path `/var/data`, 1 GB. Set `UPLOAD_DIR=/var/data/uploads`.
-2. Web service **Environment**: the production variables above. `DATABASE_URL` is the database's **Internal** URL. `APP_URL=https://milestone-pay-knv4.onrender.com`. Do not set `PORT`.
-3. **Health check path:** `/healthz` (returns `{"ok":true,"db":"pg"}`).
-4. Tables are created on first boot (migrations run automatically). `npm run seed` is optional.
-
-**PayPal app settings** (developer dashboard → Apps & Credentials → Sandbox → your app): turn on **Log in with PayPal**, tick **email** and **profile** (openid is always on), and add both return URLs: `https://milestone-pay-knv4.onrender.com/auth/paypal/callback` and `http://localhost:3000/auth/paypal/callback`.
-
----
-
-## Troubleshooting
-
-- **"Login cancelled" or "PayPal could not log you in".** Check that Log in with PayPal is enabled on the sandbox app and that the return URL matches `APP_URL` exactly.
-
-- **The PayPal popup shows an error or "system can't work right now".** Close it and try again, ideally in a normal browser window (not private or with strict blockers). Use the fake buyer login shown on the page, never your real PayPal.
-- **A red error message appears.** It names what to fix (for example a missing key in `.env`). Fix that and try again.
-- **"Port already in use".** Milestone Pay is probably already running. Close the other black window, or change `PORT` in `.env`.
-- **Start over.** Stop the app, then run `npm run seed` in this folder (or delete `db.json` and double-click the launcher). Add `-- --clean-uploads` to also delete uploaded files.
+`npm test` runs the unit tests and `node scripts/smoke.js` checks the PayPal calls against the sandbox. Environment variables, the demo walkthrough, Render deployment and troubleshooting are in [docs/setup.md](docs/setup.md).
